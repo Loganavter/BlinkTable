@@ -34,7 +34,6 @@ PRESENTER_TO_DIALOG_SLOTS: tuple[tuple[str, str], ...] = (
     ("playbackStateChanged", "_on_playback_state_changed"),
     ("buttonsStateChanged", "_on_buttons_state_changed"),
     ("fitContentAvailableChanged", "_on_fit_content_available_changed"),
-    ("thumbnailsUpdated", "_on_thumbnails_updated"),
     ("exportStarted", "_on_export_started"),
     ("exportLog", "_on_export_log"),
     ("errorOccurred", "_on_error_occurred"),
@@ -67,7 +66,6 @@ class VideoEditorDialogRuntime:
         d.presenter.playbackStateChanged.connect(d._on_playback_state_changed)
         d.presenter.buttonsStateChanged.connect(d._on_buttons_state_changed)
         d.presenter.fitContentAvailableChanged.connect(d._on_fit_content_available_changed)
-        d.presenter.thumbnailsUpdated.connect(d._on_thumbnails_updated)
         d.presenter.exportStarted.connect(d._on_export_started)
         d.presenter.exportLog.connect(d._on_export_log)
         d.presenter.errorOccurred.connect(d._on_error_occurred)
@@ -76,7 +74,7 @@ class VideoEditorDialogRuntime:
         """Exact mirror of connect_presenter_signals (A-shell S1).
 
         Drops every presenter→dialog slot so no late async completion
-        (thumbnail wave, export progress) reaches a closed dialog. Called
+        (preview render, export progress) reaches a closed dialog. Called
         from ``shell.closeEvent`` AND ``presenter.cleanup`` — idempotent:
         every lookup/disconnect is guarded, disconnecting twice is a no-op.
         """

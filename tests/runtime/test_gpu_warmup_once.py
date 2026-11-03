@@ -3,10 +3,11 @@
 Both pinned here by the 2026-10-24 GUI stall-watchdog log:
 
 - ``[stall] gui-loop blocked 4253ms`` / ``4027ms`` right around a record toggle
-  whose own cost was **0.5 ms**: the export warm-up created *two* offscreen
-  canvas widgets (main + thumbnail export services), each paying a ~4 s D3D
-  shader/pipeline compile inside ``magnifier_pass.initialize``, and it re-ran on
-  every session activation;
+  whose own cost was **0.5 ms**: the export warm-up created offscreen canvas
+  widgets, each paying a ~4 s D3D shader/pipeline compile inside
+  ``magnifier_pass.initialize``, and it re-ran on every session activation.
+  Today there is one: the second one existed for the per-frame filmstrip tiles,
+  deleted with that pipeline (strip atlas phase 3, 2026-11-03);
 - ``[stall] blocked 1350ms`` importing ``scipy.stats``/``skimage.metrics`` and
   ``320ms`` importing a magnifier module (PySide feature check walks
   ``inspect.getsource``).
@@ -72,16 +73,15 @@ def test_gpu_warm_up_reports_success_so_the_caller_can_stop():
         "warm_up_gpu_widgets must return bool: the caller needs success, not a "
         "fire-and-forget call that re-runs the 4 s compile on every activation"
     )
-    # Both offscreen widgets are warmed by the one shot (2026-10-29): leaving
-    # the thumbnail service cold only moved its compile onto the first
-    # filmstrip tile, on a worker thread. Parametrising it in the exporter
-    # means the loop must cover both services, so pin the two-way call site
-    # rather than forbidding it (the freeze-on-activation cause was repetition,
-    # not the second widget: the caller's `_gpu_warm_done` gate is above).
-    assert "for service in (self.gpu_export_service, self._thumbnail_gpu_export_service):" in text, (
-        "the one-shot warm-up must cover both offscreen services: the thumbnail "
-        "renderer owns a second widget and pays its own cold pipeline compile "
-        "on the first tile (measured 2026-10-29: ~1.5 s)"
+    # The one shot must actually reach the surviving offscreen service and
+    # return *its* verdict — a fire-and-forget call (or a hardcoded True) would
+    # let the caller record a cold widget as warm (the freeze-on-activation
+    # cause was repetition; the caller's `_gpu_warm_done` gate is above).
+    assert "service = self.gpu_export_service" in text, (
+        "the warm-up must warm the exporter's own offscreen service"
+    )
+    assert "return bool(service.warm_up())" in text, (
+        "the warm-up must return the service's own readiness, not a constant"
     )
 
     plugin = Path("src/plugins/export/plugin.py").read_text(encoding="utf-8")

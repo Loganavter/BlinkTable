@@ -13,13 +13,11 @@ from tabs.image_compare.plugins.video_editor.presenter_parts import (
     PlaybackCoordinator,
     PreviewCoordinator,
     StripBandHost,
-    ThumbnailCoordinator,
     initialize_editor_from_snapshots,
     resolve_initial_fps,
 )
 from tabs.image_compare.plugins.video_editor.services.editor import VideoEditorService
 from tabs.image_compare.plugins.video_editor.services.playback import PlaybackEngine
-from tabs.image_compare.plugins.video_editor.services.thumbnails import ThumbnailService
 from core.log_names import APP_LOGGER_NAME
 
 
@@ -159,14 +157,6 @@ class VideoEditorPresenter(QObject):
     playbackStateChanged = Signal(bool)
     buttonsStateChanged = Signal(bool, bool)
     fitContentAvailableChanged = Signal(bool)
-    # NOTE: Signal(object), not Signal(dict) (HANDOFF-1 from A-feed): a
-    # ``Signal(dict)`` emission converts the payload through QVariantMap,
-    # which drops QPixmap values — receivers got ``{}`` (strip wipe).
-    # ``object`` delivers the pixmap dict intact. The coordinator applies
-    # bulk payloads directly to ``timeline.set_thumbnails`` and re-emits
-    # here only as a no-widget fallback — both paths stay correct.
-    thumbnailsUpdated = Signal(object)
-    thumbnailReady = Signal(int, QPixmap)
     exportStarted = Signal()
     exportLog = Signal(str)
     errorOccurred = Signal(str)
@@ -181,38 +171,18 @@ class VideoEditorPresenter(QObject):
         self.editor_service = VideoEditorService(snapshots, fps=initial_fps)
         self.playback_engine = PlaybackEngine()
         self.playback_engine.set_playback_speed(1.0)
-        self.thumbnail_service = ThumbnailService()
         video_exporter = (
             getattr(self.export_controller, "video_exporter", None)
             if self.export_controller is not None
             else None
         )
         if video_exporter is not None:
-            self.thumbnail_service.set_snapshot_renderer(
-                video_exporter.render_snapshot_thumbnail_to_pil
-            )
-            async_renderer = getattr(
-                video_exporter, "render_snapshot_thumbnail_to_pil_async", None
-            )
-            if callable(async_renderer):
-                # Preferred path: keeps the thumbnail worker thread from
-                # blocking on the GPU round-trip (see ThumbnailService docs).
-                self.thumbnail_service.set_async_snapshot_renderer(async_renderer)
-            cpu_composer = getattr(video_exporter, "compose_thumbnail_cpu", None)
-            if callable(cpu_composer) and hasattr(
-                self.thumbnail_service, "set_cpu_thumbnail_composer"
-            ):
-                # Cheapest path: a ~2 ms PIL composite on the pool thread for
-                # snapshots that need no overlay/diff/channel work. The
-                # service still routes overlay-bearing frames to the GPU
-                # renderer above (thumbnail_needs_gpu), and a composer miss
-                # falls back to the sync GPU render, so this can only speed
-                # the strip up — never change a tile that needs the GPU.
-                self.thumbnail_service.set_cpu_thumbnail_composer(cpu_composer)
             # P1-followup: the exporter-private image repository is cold at
             # dialog open. Session-state image1/image2 are the SAME unified
             # stores the canvas renders and the pyramids were built for —
             # peek there first; PipelineCache second; built-in miss last.
+            # This is the pixel source the GPU strip band resolves through
+            # ``strip_recording.proxy_pair_for`` (no decode on a scroll tick).
             try:
                 sessions = getattr(main_controller, "sessions", None)
                 pipeline_cache = getattr(sessions, "_pipeline_cache", None)
@@ -257,19 +227,8 @@ class VideoEditorPresenter(QObject):
             editor_service=self.editor_service,
             model=self.model,
         )
-        self.thumbnail_coordinator = ThumbnailCoordinator(
-            view=view,
-            editor_service=self.editor_service,
-            playback_engine=self.playback_engine,
-            thumbnail_service=self.thumbnail_service,
-            emit_thumbnails_updated=self.thumbnailsUpdated.emit,
-            timer_parent=self,
-        )
         # Strip atlas phase 2: the GPU band draws the visible blocks in ONE
-        # pass on every view change. The QPainter thumbnail pipeline above
-        # keeps running untouched (phase 3 removes it); the band only covers
-        # the strip row, so a band failure degrades to a placeholder tile, not
-        # a dead timeline.
+        # pass on every view change — the only renderer the strip row has.
         self.strip_band_host = StripBandHost(
             view=view,
             editor_service=self.editor_service,
@@ -283,7 +242,6 @@ class VideoEditorPresenter(QObject):
             model=self.model,
             export_controller=export_controller,
             preview_coordinator=self.preview_coordinator,
-            thumbnail_coordinator=self.thumbnail_coordinator,
             emit_timeline_position=self.timelinePositionChanged.emit,
             emit_playback_state=self.playbackStateChanged.emit,
             emit_buttons_state=self.buttonsStateChanged.emit,
@@ -305,15 +263,6 @@ class VideoEditorPresenter(QObject):
         self.playback_engine.playbackStateChanged.connect(
             self.playback_coordinator.on_playback_state_changed
         )
-        self.thumbnail_service.thumbnailReady.connect(
-            self.thumbnail_coordinator.on_single_thumbnail_ready
-        )
-        self.thumbnail_service.thumbnailsGenerated.connect(
-            self.thumbnail_coordinator.on_thumbnails_generated
-        )
-        self.thumbnail_service.generationFinished.connect(
-            self.thumbnail_coordinator.on_thumbnails_generation_finished
-        )
         if self.main_controller and hasattr(self.main_controller, "video_export_progress"):
             self.main_controller.video_export_progress.connect(self._on_export_progress)
             self.main_controller.video_export_finished.connect(self._on_export_finished)
@@ -326,9 +275,6 @@ class VideoEditorPresenter(QObject):
         try:
             self._safe_disconnect(self.playback_engine.frameChanged, self.playback_coordinator.on_frame_changed)
             self._safe_disconnect(self.playback_engine.playbackStateChanged, self.playback_coordinator.on_playback_state_changed)
-            self._safe_disconnect(self.thumbnail_service.thumbnailReady, self.thumbnail_coordinator.on_single_thumbnail_ready)
-            self._safe_disconnect(self.thumbnail_service.thumbnailsGenerated, self.thumbnail_coordinator.on_thumbnails_generated)
-            self._safe_disconnect(self.thumbnail_service.generationFinished, self.thumbnail_coordinator.on_thumbnails_generation_finished)
         except Exception:
             pass
         if self.main_controller:
@@ -400,18 +346,6 @@ class VideoEditorPresenter(QObject):
             self.view.edit_filename.editingFinished.connect(
                 self.output_coordinator.refresh_unique_output_filename
             )
-        if hasattr(self.view, "timeline"):
-            # Frozen timeline surface: zoom + viewport signals only (the
-            # deprecated toolkit signals are gone toolkit-side).
-            self.view.timeline.viewportChanged.connect(
-                self.thumbnail_coordinator.on_timeline_viewport_changed
-            )
-            self.view.timeline.zoomChanged.connect(
-                self.thumbnail_coordinator.on_timeline_zoom_changed
-            )
-            self.view.timeline.viewportChangedState.connect(
-                self.thumbnail_coordinator.on_timeline_viewport_state_changed
-            )
         self.view.windowResized.connect(self.preview_coordinator.on_window_resized)
 
     def _disconnect_view_signals(self):
@@ -479,23 +413,6 @@ class VideoEditorPresenter(QObject):
                 )
         except Exception:
             pass
-        try:
-            timeline = _sig(view, "timeline")
-            if timeline is not None:
-                self._safe_disconnect(
-                    _sig(timeline, "viewportChanged"),
-                    self.thumbnail_coordinator.on_timeline_viewport_changed,
-                )
-                self._safe_disconnect(
-                    _sig(timeline, "zoomChanged"),
-                    self.thumbnail_coordinator.on_timeline_zoom_changed,
-                )
-                self._safe_disconnect(
-                    _sig(timeline, "viewportChangedState"),
-                    self.thumbnail_coordinator.on_timeline_viewport_state_changed,
-                )
-        except Exception:
-            pass
 
     def _on_view_destroyed(self, *_args):
         self._disconnect_service_signals()
@@ -508,7 +425,6 @@ class VideoEditorPresenter(QObject):
             strip_band_host.cleanup()
         self.preview_coordinator.on_view_destroyed()
         self.output_coordinator.detach_view()
-        self.thumbnail_coordinator.detach_view()
         self.playback_coordinator.detach_view()
         self.export_coordinator.detach_view()
         self.view = None
@@ -563,7 +479,6 @@ class VideoEditorPresenter(QObject):
         _dbg_t1 = time.perf_counter()
         self.preview_coordinator.reset_render_state()
         self.playback_coordinator.update_buttons_state()
-        self.thumbnail_coordinator.generate_thumbnails()
         self.preview_coordinator.schedule_update()
         # Eager, independent of fit_content_mode: lets the UI disable the
         # fit-content toggle up front when the canvas never leaves 0..1.
@@ -624,7 +539,6 @@ class VideoEditorPresenter(QObject):
         self._disconnect_view_signals()
         self._disconnect_presenter_signals()
         self.playback_engine.stop()
-        self.thumbnail_coordinator.cleanup()
         strip_band_host = getattr(self, "strip_band_host", None)
         if strip_band_host is not None:
             strip_band_host.cleanup()
@@ -640,7 +554,6 @@ class VideoEditorPresenter(QObject):
             self.view.timeline._lerp_timer.stop()
         self.preview_coordinator.cleanup()
         self.output_coordinator.detach_view()
-        self.thumbnail_coordinator.detach_view()
         self.playback_coordinator.detach_view()
         self.export_coordinator.detach_view()
         self.view = None

@@ -115,10 +115,9 @@ def cover_crop_box(
 
     Scale by the max ratio, then center-crop to ``content_size`` — the box
     :func:`cover_source_to_content` materializes. Exposed separately so a
-    CPU-side compositor can reuse the exact same box without allocating a
-    ``TiledPixelStore`` for a 160x90 tile (``allocate`` + resample costs
-    ~11 ms per side, measured 2026-10-29, while a whole filmstrip tile's CPU
-    budget is 5 ms — see ``cpu_thumbnail``). ``None`` for a degenerate size.
+    caller can read the exact same box without allocating a ``TiledPixelStore``
+    for a 160x90 tile (``allocate`` + resample costs ~11 ms per side, measured
+    2026-10-29). ``None`` for a degenerate size.
     """
     sw, sh = int(source_size[0]), int(source_size[1])
     cw, ch = int(content_size[0]), int(content_size[1])
@@ -140,7 +139,7 @@ def cover_source_to_content(
     Unlike :func:`fit_source_to_content` (fit-inside + aspect insets folded
     into pads), cover scales by the max ratio and center-crops to exactly
     ``content_size`` — the strip shows full-bleed 160x90 blocks with no
-    transparent letterbox pads for ``_finish_thumbnail_image`` to trim.
+    transparent letterbox pads to trim.
     Export/letterbox paths must NOT use this (they keep fit + pads).
     """
     cw, ch = int(content_size[0]), int(content_size[1])

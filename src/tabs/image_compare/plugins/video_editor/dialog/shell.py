@@ -534,9 +534,6 @@ class VideoEditorDialog(ThemedDialog):
             self.btn_fit_content.setEnabled(available)
             self.btn_fit_content.setProperty("opacity", "1.0" if available else "0.4")
 
-    def _on_thumbnails_updated(self, thumbnails: dict):
-        self.timeline.set_thumbnails(thumbnails)
-
     def _on_export_started(self):
         self._set_export_progress_state("active")
         self.set_export_progress(0)
@@ -673,7 +670,7 @@ class VideoEditorDialog(ThemedDialog):
         Python wrapper still answers attribute lookups while every C++ call
         inside it raises ``RuntimeError: Internal C++ object ... already
         deleted`` (owner traceback 2026-10-28: ``closeEvent`` → ``cleanup`` →
-        ``thumbnails.cleanup`` → ``SettleGate.cancel`` → ``QTimer.stop``).
+        ``SettleGate.cancel`` → ``QTimer.stop``).
         In that state the teardown already ran and its timers died with it:
         re-entering it can only crash, so skip and log.
         """

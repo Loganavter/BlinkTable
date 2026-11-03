@@ -287,7 +287,6 @@ class _StubPresenter(QObject):
     playbackStateChanged = Signal(bool)
     buttonsStateChanged = Signal(bool, bool)
     fitContentAvailableChanged = Signal(bool)
-    thumbnailsUpdated = Signal(dict)
     exportStarted = Signal()
     exportLog = Signal(str)
     errorOccurred = Signal(str)

@@ -124,18 +124,12 @@ def _make_fake_presenter():
         on_window_resized=lambda: None,
     )
     output = SimpleNamespace(on_container_changed=lambda _v: None)
-    thumb = SimpleNamespace(
-        on_timeline_viewport_changed=lambda _s: None,
-        on_timeline_zoom_changed=lambda _z: None,
-        on_timeline_viewport_state_changed=lambda _s: None,
-    )
     fake = SimpleNamespace(
         view=view,
         playback_coordinator=playback,
         export_coordinator=export,
         preview_coordinator=preview,
         output_coordinator=output,
-        thumbnail_coordinator=thumb,
         export_video=lambda: None,
         _on_view_destroyed=lambda: None,
         _safe_disconnect=VideoEditorPresenter._safe_disconnect,
@@ -224,7 +218,7 @@ def test_timeline_space_reaches_toggle_exactly_once_end_to_end():
 
 
 def _presenter_signal_stub():
-    """QObject carrying the 10 production presenter signals (dialog side)."""
+    """QObject carrying the 9 production presenter signals (dialog side)."""
     from PySide6.QtGui import QPixmap as _QPixmap
 
     class _Stub(QObject):
@@ -236,7 +230,6 @@ def _presenter_signal_stub():
         playbackStateChanged = _Signal(bool)
         buttonsStateChanged = _Signal(bool, bool)
         fitContentAvailableChanged = _Signal(bool)
-        thumbnailsUpdated = _Signal(object)
         exportStarted = _Signal()
         exportLog = _Signal(str)
         errorOccurred = _Signal(str)
@@ -258,7 +251,6 @@ def _dialog_slot_stub(presenter, calls):
         _on_fit_content_available_changed=lambda _b: calls.append(
             "fitContentAvailableChanged"
         ),
-        _on_thumbnails_updated=lambda _t: calls.append("thumbnailsUpdated"),
         _on_export_started=lambda: calls.append("exportStarted"),
         _on_export_log=lambda _s: calls.append("exportLog"),
         _on_error_occurred=lambda _s: calls.append("errorOccurred"),
@@ -274,7 +266,6 @@ def _emit_all_presenter_signals(presenter):
     presenter.playbackStateChanged.emit(False)
     presenter.buttonsStateChanged.emit(True, False)
     presenter.fitContentAvailableChanged.emit(True)
-    presenter.thumbnailsUpdated.emit({})
     presenter.exportStarted.emit()
     presenter.exportLog.emit("line")
     presenter.errorOccurred.emit("boom")
@@ -301,7 +292,7 @@ def test_runtime_connect_disconnect_pairing_is_complete():
 
 
 def test_close_reopen_leaves_no_live_connections():
-    """Bidirectional disconnect: close drops all 10 slots, reopen rewires.
+    """Bidirectional disconnect: close drops all 9 slots, reopen rewires.
 
     Post-disconnect emissions simulate late async completions (a worker wave
     finishing after close): none may reach a dialog slot. Reconnecting (the
@@ -317,19 +308,19 @@ def test_close_reopen_leaves_no_live_connections():
     runtime = runtime_mod.VideoEditorDialogRuntime(dialog)
     runtime.connect_presenter_signals()
     _emit_all_presenter_signals(presenter)
-    assert len(calls) == 10, (
-        "all 10 presenter→dialog slots must be live after connect"
+    assert len(calls) == 9, (
+        "all 9 presenter→dialog slots must be live after connect"
     )
 
     # Close path: every slot drops, late emissions go nowhere.
     runtime.disconnect_presenter_signals()
     _emit_all_presenter_signals(presenter)
-    assert len(calls) == 10
+    assert len(calls) == 9
 
     # Reopen path: rewire once, delivery restored exactly once per emit.
     runtime.connect_presenter_signals()
     _emit_all_presenter_signals(presenter)
-    assert len(calls) == 20
+    assert len(calls) == 18
 
 
 def test_presenter_side_disconnect_drops_all_dialog_slots():
@@ -363,136 +354,3 @@ def test_presenter_side_disconnect_drops_all_dialog_slots():
     presenter.cleanup()
     _emit_all_presenter_signals(presenter)
     assert received == []
-
-
-def test_thumbnails_updated_delivers_pixmap_dict_intact():
-    """HANDOFF-1: Signal(object) fanout carries QPixmap dicts intact.
-
-    With the old ``Signal(dict)`` the QVariantMap conversion dropped every
-    QPixmap value and receivers got ``{}`` (strip wipe). Emitting a real
-    pixmap dict through the REAL presenter signal must arrive with keys,
-    types, and pixels intact — this test fails on ``Signal(dict)``.
-    """
-    _app()
-    from PySide6.QtGui import QPixmap, Qt
-
-    view = _ViewHolder()
-    export_controller = SimpleNamespace(video_exporter=None)
-    presenter = VideoEditorPresenter(view, [], export_controller, None)
-
-    received: list = []
-    presenter.thumbnailsUpdated.connect(lambda payload: received.append(payload))
-
-    red = QPixmap(64, 36)
-    red.fill(Qt.GlobalColor.red)
-    blue = QPixmap(64, 36)
-    blue.fill(Qt.GlobalColor.blue)
-    presenter.thumbnailsUpdated.emit({3: red, 7: blue})
-
-    assert len(received) == 1
-    assert set(received[0].keys()) == {3, 7}
-    assert all(
-        isinstance(pix, QPixmap) and not pix.isNull()
-        for pix in received[0].values()
-    )
-    assert received[0][3].toImage().pixelColor(4, 4).red() > 200
-    presenter.cleanup()
-
-
-def _stub_recording(duration=10.0):
-    class _Rec:
-        def evaluate_at(self, _timestamp: float):
-            return object()
-
-        def get_duration(self) -> float:
-            return duration
-
-    return _Rec()
-
-
-def test_stale_service_completion_cannot_surface(qapp, monkeypatch):
-    """HANDOFF-3 decision proof: the service drops stale waves pre-emit.
-
-    A retired generation's completion (same call the coordinator would get
-    from a late worker) never emits ``thumbnailReady``; the live generation
-    still delivers. Since stale cannot surface past the service, the
-    presenter keeps the 2-arg ``thumbnailReady`` wiring and the coordinator
-    tag stays belt-and-braces (proven next). No 3-arg signal is introduced.
-    """
-    from PIL import Image
-
-    from tabs.image_compare.plugins.video_editor.services.thumbnails import (
-        ThumbnailService,
-    )
-
-    service = ThumbnailService()
-    # Hermetic + synchronous: no disk cache, parked pool (workers never run).
-    service.set_thumbnail_disk_cache(None)
-    monkeypatch.setattr(service._thread_pool, "start", lambda worker, priority=0: None)
-    ready: list = []
-    service.thumbnailReady.connect(lambda i, px: ready.append((i, px)))
-
-    generation = service.generate_thumbnails(
-        _stub_recording(),
-        target_count=50,
-        priority_indices=[0, 1, 2],
-        fps=60,
-    )
-    assert service._pending_indices == {0, 1, 2}
-
-    retired = service.retire_in_flight_thumbnails()
-    assert retired != generation
-
-    # Late arrival from the retired wave: dropped, nothing emitted.
-    service._on_thumbnail_generated(0, None, generation)
-    assert ready == []
-
-    # Live generation still delivers a real pixmap.
-    img = Image.new("RGBA", (160, 90), (255, 0, 0, 255))
-    service._on_thumbnail_generated(1, img, retired)
-    assert [i for i, _ in ready] == [1]
-    assert not ready[0][1].isNull()
-    assert (ready[0][1].width(), ready[0][1].height()) == (160, 90)
-
-
-def test_coordinator_drops_stale_tagged_completion():
-    """Coordinator tag is fail-closed on mismatch, fail-open on unknown.
-
-    ``on_single_thumbnail_ready`` drops a completion whose generation tag
-    mismatches the mirrored feed generation, applies the matching one, and
-    applies untagged (``None`` — today's 2-arg wiring) deliveries. This is
-    the belt-and-braces layer behind the service-side drop proven above.
-    """
-    _app()
-    from PySide6.QtGui import QPixmap
-    from PySide6.QtCore import Qt
-
-    from tabs.image_compare.plugins.video_editor.presenter_parts.thumbnails import (
-        ThumbnailCoordinator,
-    )
-
-    applied: dict = {}
-    timeline = SimpleNamespace(
-        add_thumbnail=lambda i, px: applied.__setitem__(i, px)
-    )
-    coordinator = ThumbnailCoordinator(
-        view=SimpleNamespace(timeline=timeline),
-        editor_service=SimpleNamespace(
-            get_current_recording=lambda: object(),
-            get_fps=lambda: 60,
-            get_frame_count=lambda: 100,
-        ),
-        playback_engine=SimpleNamespace(get_current_frame=lambda: 0),
-        thumbnail_service=SimpleNamespace(),
-        emit_thumbnails_updated=lambda _t: None,
-    )
-    coordinator._feed_generation = 9
-    pix = QPixmap(32, 18)
-    pix.fill(Qt.GlobalColor.red)
-
-    coordinator.on_single_thumbnail_ready(4, pix, generation=8)
-    assert applied == {}
-    coordinator.on_single_thumbnail_ready(4, pix, generation=9)
-    assert set(applied) == {4}
-    coordinator.on_single_thumbnail_ready(5, pix, generation=None)
-    assert set(applied) == {4, 5}

@@ -88,9 +88,9 @@ def prepare_from_cache_miss(
     # box every frame kept its letterbox bars, so the stretched cell showed a
     # narrow strip of the frame and empty space beside it — the "band renders
     # the wrong pixels" report (a portrait source collapses to 40 of 160 px,
-    # i.e. 32 of a 128 px cell). Covering the WHOLE canvas is also what the
-    # CPU filmstrip composer already does
-    # (``cpu_thumbnail._cover_pil(source, tile_size)`` fills the tile).
+    # i.e. 32 of a 128 px cell). Covering the WHOLE canvas keeps one band tile
+    # equal to one filmstrip thumbnail: the 160x90 pixmap the strip drew was
+    # the same full-bleed cover of the pair.
     if is_thumbnail_target_size(
         request.target_surface.width, request.target_surface.height
     ):
