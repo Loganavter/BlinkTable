@@ -12,6 +12,7 @@ from tabs.image_compare.plugins.video_editor.presenter_parts import (
     OutputPathCoordinator,
     PlaybackCoordinator,
     PreviewCoordinator,
+    StripBandHost,
     ThumbnailCoordinator,
     initialize_editor_from_snapshots,
     resolve_initial_fps,
@@ -264,6 +265,17 @@ class VideoEditorPresenter(QObject):
             emit_thumbnails_updated=self.thumbnailsUpdated.emit,
             timer_parent=self,
         )
+        # Strip atlas phase 2: the GPU band draws the visible blocks in ONE
+        # pass on every view change. The QPainter thumbnail pipeline above
+        # keeps running untouched (phase 3 removes it); the band only covers
+        # the strip row, so a band failure degrades to a placeholder tile, not
+        # a dead timeline.
+        self.strip_band_host = StripBandHost(
+            view=view,
+            editor_service=self.editor_service,
+            export_controller=export_controller,
+        )
+        self.strip_band_host.attach()
         self.playback_coordinator = PlaybackCoordinator(
             view=view,
             editor_service=self.editor_service,
@@ -361,6 +373,10 @@ class VideoEditorPresenter(QObject):
         self.view.widthChanged.connect(self.preview_coordinator.on_width_changed)
         self.view.heightChanged.connect(self.preview_coordinator.on_height_changed)
         self.view.fpsChanged.connect(self.playback_coordinator.on_fps_changed)
+        if getattr(self, "strip_band_host", None) is not None:
+            # fps is part of the strip layout (block -> time), so a new fps
+            # rebuilds the window on the next band frame.
+            self.view.fpsChanged.connect(self.strip_band_host.on_recording_changed)
         self.view.previewScaleChanged.connect(
             self.preview_coordinator.on_preview_scale_changed
         )
@@ -438,6 +454,11 @@ class VideoEditorPresenter(QObject):
             (_sig(view, "containerChanged"), self.output_coordinator.on_container_changed),
             (_sig(view, "windowResized"), self.preview_coordinator.on_window_resized),
         ]
+        strip_band_host = getattr(self, "strip_band_host", None)
+        if strip_band_host is not None:
+            # Appended only when the host exists: ``disconnect(None)`` would
+            # drop every slot on ``fpsChanged``, not just ours.
+            pairs.append((_sig(view, "fpsChanged"), strip_band_host.on_recording_changed))
         for signal, slot in pairs:
             try:
                 self._safe_disconnect(signal, slot)
@@ -480,6 +501,11 @@ class VideoEditorPresenter(QObject):
         self._disconnect_service_signals()
         self._disconnect_view_signals()
         self._disconnect_presenter_signals()
+        strip_band_host = getattr(self, "strip_band_host", None)
+        if strip_band_host is not None:
+            # Partial presenters (stub views in the wiring suites) never built
+            # the host; the destroy path must stay a no-op for them.
+            strip_band_host.cleanup()
         self.preview_coordinator.on_view_destroyed()
         self.output_coordinator.detach_view()
         self.thumbnail_coordinator.detach_view()
@@ -571,12 +597,21 @@ class VideoEditorPresenter(QObject):
 
     def undo(self):
         self.playback_coordinator.undo()
+        self._strip_band_content_changed()
 
     def redo(self):
         self.playback_coordinator.redo()
+        self._strip_band_content_changed()
 
     def trim_selection(self):
         self.playback_coordinator.trim_selection()
+        self._strip_band_content_changed()
+
+    def _strip_band_content_changed(self):
+        """A cut/undo/redo changed the recording the strip draws from."""
+        host = getattr(self, "strip_band_host", None)
+        if host is not None:
+            host.on_recording_changed()
 
     def export_video(self):
         self.export_coordinator.export_video(self.exportStarted.emit)
@@ -590,6 +625,9 @@ class VideoEditorPresenter(QObject):
         self._disconnect_presenter_signals()
         self.playback_engine.stop()
         self.thumbnail_coordinator.cleanup()
+        strip_band_host = getattr(self, "strip_band_host", None)
+        if strip_band_host is not None:
+            strip_band_host.cleanup()
         # Remaining toolkit-private fallback (A-shell S1): no public
         # stop/teardown API is visible on the timeline widget from this
         # single-repo cell, so the guarded private-timer stop stays. It

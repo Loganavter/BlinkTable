@@ -116,6 +116,24 @@ def _build(count: int, *, recording=None, **kwargs):
     )
 
 
+def _one_row(count: int):
+    """The timeline's band geometry: every block in ONE row (cols == count)."""
+    return build_window(
+        _Recording(blocks=max(64, count)),
+        0,
+        count,
+        _TILE[0],
+        _TILE[1],
+        request=SimpleNamespace(
+            target_surface=SimpleNamespace(width=_TILE[0], height=_TILE[1])
+        ),
+        layout=StripBlockLayout(
+            tile_size=_TILE, fps=10.0, block_count=count, cols=count
+        ),
+        plan_builder=_plan_builder,
+    )
+
+
 @pytest.mark.parametrize("count", [17, 32, 64])
 def test_window_plans_each_visible_block_once(count):
     window = _build(count)
@@ -367,3 +385,32 @@ def test_framebuffer_rects_follow_the_target_pixel_size_and_y_rule():
     )
     assert hidpi == [(x * 2, y * 2, w * 2, h * 2) for (x, y, w, h) in window.rects()]
     assert hidpi[-1][0] + hidpi[-1][2] == window.target_w * 2
+
+
+def test_framebuffer_rects_tile_a_fractional_target_without_overlap():
+    """The live band: an 8x160x90 grid drawn into 1020x72 (0.797 x 0.8).
+
+    Rounding each cell's ORIGIN and WIDTH independently makes neighbours
+    overlap at a fractional scale (cell 1 [0,128), cell 2 starting at 128 with
+    width 128, cell 3 starting at 255 — inside cell 2), so a cell's edge column
+    was painted by the next tile's viewport. Edge snapping must make adjacent
+    cells share an edge and the last cell end exactly on the target.
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_pass import (
+        framebuffer_rects,
+    )
+
+    window = _one_row(8)
+    assert (window.target_w, window.target_h) == (8 * _TILE[0], _TILE[1])
+    target = _FakeTarget(1020, 72)
+    rects = framebuffer_rects(
+        window, target, rhi=_FakeRhi(y_up=False), never_shown=False
+    )
+
+    assert rects[0][0] == 0
+    assert rects[-1][0] + rects[-1][2] == 1020
+    for left, right in zip(rects, rects[1:]):
+        assert right[0] == left[0] + left[2], f"{left} and {right} do not tile"
+    assert all(h == 72 for (_x, _y, _w, h) in rects)
+    # Every cell keeps its share of the target (127 or 128 of 1020 px).
+    assert all(127 <= w <= 129 for (_x, _y, w, _h) in rects)

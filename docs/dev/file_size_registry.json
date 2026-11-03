@@ -88,10 +88,10 @@
       "path": "src/devtools/bench_strip_batch.py",
       "limit": 500,
       "marker": "Audit-Meta:",
-      "raw": "pattern=instrument reason=\"phase-0 bench: CPU planning + one-pass atlas + exactness harness + self-test are one measurement; splitting them would let the two halves drift\"",
+      "raw": "pattern=instrument reason=\"phase-0 bench: CPU planning + one-pass atlas + exactness harness + self-test are one measurement, and the band-host seam (--band) reuses the same planning/packing/slicing so its stage verdict cannot drift from the atlas verdict; splitting them would let the halves disagree\"",
       "parsed": {
         "pattern": "instrument",
-        "reason": "phase-0 bench: CPU planning + one-pass atlas + exactness harness + self-test are one measurement; splitting them would let the two halves drift"
+        "reason": "phase-0 bench: CPU planning + one-pass atlas + exactness harness + self-test are one measurement, and the band-host seam (--band) reuses the same planning/packing/slicing so its stage verdict cannot drift from the atlas verdict; splitting them would let the halves disagree"
       }
     },
     {
