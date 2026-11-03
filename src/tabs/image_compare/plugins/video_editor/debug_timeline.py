@@ -11,8 +11,7 @@ flood log.txt. Payload goes to Tracer when IMGSLI_TRACE=1.
 Zone note (host-dbgflags W5): the former ``IMGSLI_VIDEO_EDITOR_DEBUG``
 umbrella disjunct is dropped — timeline sites gate on TIMELINE-only
 while editor-zone sites keep ``ic_video_debug_enabled``. Migration:
-``IMGSLI_TIMELINE_DEBUG=1`` for timeline, ``IMGSLI_THUMBNAIL_DEBUG=1``
-for the thumbnail pipeline.
+``IMGSLI_TIMELINE_DEBUG=1`` for the timeline channel.
 
 Contract: rg for legacy debug markers outside this file and tracing is 0.
 """

@@ -30,18 +30,19 @@ Preferred export/video direction:
 Image export preview/final and video preview/export differ by snapshot
 source and target surface, not by feature-specific scene assembly.
 
-**Thumbnail strip fast path (CPU).** Filmstrip tiles (~160x90) are the one
-snapshot consumer with a CPU composite: `ThumbnailService` prefers
-`video_snapshot_rendering.cpu_thumbnail.compose_thumbnail_cpu` when the
-snapshot carries no state the composite cannot reproduce
-(`thumbnail_needs_gpu` False — no magnifier/guides overlay, no filename
-overlay, no diff mode, RGB/R/G/B/L channel, two-image mode) and falls back to
-the GPU renderer on a composer miss. It reproduces the base shader's split /
-channel / divider semantics from the same pyramid proxies the GPU path uses,
-and the gate is fail-open: anything it cannot reproduce (including
-single-image preview, whose pane mapping a snapshot does not carry) keeps
-today's GPU tile. Pinned by
-`src/tabs/image_compare/tests/video/test_thumbnail_cpu_composite.py`.
+**Thumbnail strip fast path (GPU band).** Filmstrip tiles (~160x90) are the one
+snapshot consumer that does not go through one render per tile:
+`services/video_snapshot_rendering/strip_window.py` plans the visible blocks
+into ONE window (per-tile plans, per-tile texture-array layers) and
+`strip_pass.py` records them in a single `beginPass`/`endPass`, driven by
+`presenter_parts/strip_band.py` on every view change. That is the strip's only
+renderer — the per-frame QPainter thumbnail pipeline (a tile at a time on a
+worker pool, then a pixmap per timeline index) was deleted in strip atlas
+phase 3, so there is no second tile path to drift from the live canvas or the
+export. A tile is still exactly the 160x90 `THUMBNAIL_TARGET_SIZE`, which is
+what selects the full-bleed cover plan. Pinned by
+`src/tabs/image_compare/tests/video/test_strip_window.py`,
+`test_strip_band_wiring.py` and `tests/contracts/test_strip_single_renderer.py`.
 
 Snapshot prepare must **not** bake letterbox or feature padding into image
 pixels. Keep `TiledPixelStore` (or other unpadded sources) on the plan and

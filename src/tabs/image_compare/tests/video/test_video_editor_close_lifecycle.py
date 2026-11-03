@@ -3,37 +3,36 @@
 Owner traceback (2026-10-28)::
 
     Error calling Python override of QDialog::closeEvent()
-    shell.closeEvent -> presenter.cleanup -> thumbnails.cleanup
-      -> SettleGate.cancel -> self._timer.stop()
+    shell.closeEvent -> presenter.cleanup -> SettleGate.cancel
+      -> self._timer.stop()
     RuntimeError: libshiboken: Internal C++ object (PySide6.QtCore.QTimer)
     already deleted
 
-Mechanism: ``ThumbnailCoordinator`` owns a ``SettleGate`` parented to the
-presenter (``timer_parent=self`` in ``VideoEditorPresenter``), and the gate
-owns its ``QTimer`` as a QObject child. ``presenter.cleanup()`` and the
+Mechanism: the coordinators own ``SettleGate``s parented to the presenter
+(``timer_parent=self`` in ``VideoEditorPresenter``), and a gate owns its
+``QTimer`` as a QObject child. ``presenter.cleanup()`` and the
 ``view.destroyed`` handler (``_on_view_destroyed``) both end with
 ``deleteLater()`` on that presenter, so once Qt processes the deletion the
-presenter's children — the gate and its timer — are gone while the coordinator
-still holds Python wrappers for them. A later teardown re-entry (``closeEvent``
-after the presenter already tore itself down) calls ``cancel()`` on the dead
-gate: every attribute lookup still answers, and the first C++ call raises.
+presenter's children — the gates and their timers — are gone while the Python
+wrappers still answer attribute lookups. A later teardown re-entry
+(``closeEvent`` after the presenter already tore itself down) then calls into
+dead C++ objects.
 
-The contract pinned here:
+The contract pinned here is on the surviving close path — the preview
+coordinator's ``SettleGate`` and its pool are still presenter children, so the
+same re-entry is still unsafe:
 
-* ``ThumbnailCoordinator.cleanup`` (and its gate cancel/ping helpers) survive
-  a gate whose C++ object — or only whose ``QTimer`` — is already deleted;
-* a live gate is still cancelled (the guard must not turn teardown into a
-  no-op);
 * ``VideoEditorDialog.closeEvent`` closes cleanly when the presenter's C++
-  object is already gone, instead of re-entering its dead coordinator tree.
+  object is already gone, instead of re-entering its dead coordinator tree;
+* a normal close still tears the presenter down.
 
 The dead state is produced without waiting on a real event loop by deleting
 the presenter's C++ object directly (``shiboken6.delete``) — the same state
 ``deleteLater()`` reaches, and the one the owner's traceback was taken in.
 
-Falsification (pre-fix tree, this file): both dead-state tests raise
-``RuntimeError: Internal C++ object ... already deleted`` from
-``SettleGate.cancel``.
+(Until strip atlas phase 3 this file also pinned the thumbnail coordinator's
+own gate surviving a deleted gate/timer; that coordinator and its gate are
+gone — the strip is one GPU band pass with no settle gate at all.)
 """
 
 from __future__ import annotations
@@ -80,54 +79,11 @@ def _destroy(dialog) -> None:
 
 
 def _kill_presenter(dialog) -> None:
-    """Reach the field state: presenter + its child timers C++-deleted."""
+    """Reach the field state: presenter (and its child timers) C++-deleted."""
     presenter = dialog.presenter
-    coordinator = presenter.thumbnail_coordinator
-    gate = coordinator._visible_refresh
     shiboken6.delete(presenter)
     # Sanity: this is the state the crash needs — not a mock of it.
     assert not shiboken6.isValid(presenter)
-    assert not shiboken6.isValid(gate)
-
-
-def test_thumbnail_cleanup_survives_an_already_deleted_gate(qapp):
-    dialog = _open_editor(qapp)
-    coordinator = dialog.presenter.thumbnail_coordinator
-    try:
-        _kill_presenter(dialog)
-
-        coordinator.cleanup()
-        coordinator.cleanup()  # idempotent: closeEvent may re-enter it
-    finally:
-        _destroy(dialog)
-
-
-def test_gate_cancel_survives_a_deleted_timer_under_a_live_gate(qapp):
-    """Half-torn-down case: the gate lives, its ``QTimer`` child does not."""
-    dialog = _open_editor(qapp)
-    coordinator = dialog.presenter.thumbnail_coordinator
-    try:
-        timer = coordinator._visible_refresh._timer
-        shiboken6.delete(timer)
-        assert not shiboken6.isValid(timer)
-
-        coordinator.cleanup()
-    finally:
-        _destroy(dialog)
-
-
-def test_cleanup_still_cancels_a_live_gate(qapp):
-    """The guard above must not turn teardown into a no-op."""
-    dialog = _open_editor(qapp)
-    coordinator = dialog.presenter.thumbnail_coordinator
-    try:
-        coordinator.on_timeline_viewport_changed()
-        assert coordinator._visible_refresh.is_pending()
-
-        coordinator.cleanup()
-        assert not coordinator._visible_refresh.is_pending()
-    finally:
-        _destroy(dialog)
 
 
 def test_close_event_survives_a_presenter_that_already_tore_down(qapp):
@@ -168,14 +124,12 @@ def test_close_after_a_dead_presenter_still_closes_the_window(qapp):
 def test_normal_close_still_tears_the_presenter_down(qapp):
     dialog = _open_editor(qapp)
     presenter = dialog.presenter
-    gate = presenter.thumbnail_coordinator._visible_refresh
     try:
         dialog.close()
         for _ in range(3):
             qapp.processEvents()
 
-        # Player + settle gate die with the dialog: nothing survives the close.
+        # The presenter dies with the dialog: nothing survives the close.
         assert not shiboken6.isValid(presenter)
-        assert not shiboken6.isValid(gate)
     finally:
         _destroy(dialog)

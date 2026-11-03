@@ -12,8 +12,8 @@ What it measures (per N, default 17 / 32 / 64, tile 160x90):
                     from two generated 3000x2000 sources.
 * reference       - the CURRENT per-tile route: each plan rendered on its own
                     offscreen canvas surface (``GpuExportService.render_plan``,
-                    the same GPU step ``render_snapshot_thumbnail_to_pil`` /
-                    ``_render_thumbnail_from_proxy`` ends in) and hashed.
+                    the same GPU step the snapshot/export renderer ends in) and
+                    hashed.
 * ``pass_ms``     - one target, one pass: N viewports + per-tile uniforms and
                     per-tile texture-array layers, recorded in a single
                     beginPass/endPass by ``_StripAtlasWidget``.
@@ -1002,9 +1002,8 @@ def preflight_rhi() -> None:
 def render_reference_tiles(tiles: list[TileFrame], sample_count: int | None):
     """The CURRENT per-tile route, one offscreen surface per tile.
 
-    ``GpuExportService.render_plan`` is the GPU step the strip's
-    ``render_snapshot_thumbnail_to_pil`` / ``_render_thumbnail_from_proxy``
-    ends in (same plan -> same offscreen canvas widget -> same grab).
+    ``GpuExportService.render_plan`` is the GPU step the app's snapshot
+    renderer ends in (same plan -> same offscreen canvas widget -> same grab).
     """
     from plugins.export.services.gpu_export import GpuExportService
 

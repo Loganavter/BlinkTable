@@ -7,10 +7,8 @@ import os
 import time
 from collections.abc import Sequence
 
-from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor
 
-from plugins.export.services.gpu_export import GpuExportService
 from engine.cache import TargetSurfaceSpec
 from engine.store.pyramid_registry import pyramid_for
 from tabs.image_compare.plugins.video_editor.services.keyframing import KeyframedRecording
@@ -20,9 +18,6 @@ from tabs.image_compare.plugins.video_editor.services.editor import (
 from tabs.image_compare.services.video_snapshot_rendering.geometry import (
     THUMBNAIL_TARGET_SIZE,
     thumbnail_proxy_dest_scale,
-)
-from tabs.image_compare.services.video_snapshot_rendering.cpu_thumbnail import (
-    compose_thumbnail_cpu as _compose_thumbnail_cpu,
 )
 from tabs.image_compare.plugins.video_editor.services.video_export.bounds import (
     CanvasBoundsAnalyzer,
@@ -63,48 +58,6 @@ VIDEO_EDITOR_AUTO_CROP = False
 THUMBNAIL_SOURCE_PYRAMID = "pyramid"
 THUMBNAIL_SOURCE_CACHE = "cache"
 THUMBNAIL_SOURCE_MISS = "miss"
-
-
-class _MainThreadCallbackBridge(QObject):
-    """Posts thumbnail callbacks to the bridge owner's thread (GUI/main).
-
-    The bridge is created in ``VideoExporterService.__init__`` (GUI
-    thread), so a queued ``_fire`` emit from a thumbnail worker lands on
-    the main thread — matching the ``render_snapshot_thumbnail_to_pil_async``
-    contract (``callback`` fires later, on the main thread). Same-thread
-    callers get ``False`` from :meth:`post` and call back directly.
-    """
-
-    _fire = Signal(object)
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._fire.connect(self._deliver)
-
-    def post(self, callback, image) -> bool:
-        try:
-            from PySide6.QtCore import QThread
-            from PySide6.QtWidgets import QApplication
-
-            app = QApplication.instance()
-            if app is None:
-                return False
-            if QThread.currentThread() is app.thread():
-                return False
-            self._fire.emit((callback, image))
-            return True
-        except Exception:
-            return False
-
-    def _deliver(self, payload) -> None:
-        try:
-            callback, image = payload
-        except Exception:
-            return
-        try:
-            callback(image)
-        except Exception:
-            logger.error("Thumbnail async callback failed", exc_info=True)
 
 
 def _image_uid_for_log(image):
@@ -320,14 +273,6 @@ class VideoExporterService:
         self.main_store = store
         self.main_controller = main_controller
         self.gpu_export_service = gpu_export_service
-        # Thumbnails render at 160×90, preview/export at 640×480 — sharing one
-        # QRhiWidget forces resize thrash (paint_gl_ms 50→1100ms) and size
-        # mismatch transparent grabs. Keep separate offscreen widgets.
-        self._thumbnail_gpu_export_service = (
-            GpuExportService(resource_manager=None)
-            if gpu_export_service is not None
-            else None
-        )
 
         self._cached_global_bounds: GlobalCanvasBounds | None = None
         self._cached_bounds_snapshots_hash = None
@@ -344,10 +289,6 @@ class VideoExporterService:
         # Last per-side source kinds ``(kind1, kind2)`` from the thumbnail
         # path only (structure asserts; export never touches this).
         self._last_thumbnail_source = None
-        try:
-            self._thumbnail_callback_bridge = _MainThreadCallbackBridge()
-        except Exception:
-            self._thumbnail_callback_bridge = None
 
         self._image_repository = VideoExportImageRepository()
         self._bounds_analyzer = CanvasBoundsAnalyzer(self._image_repository.get_image)
@@ -355,47 +296,34 @@ class VideoExporterService:
             image_loader=self._image_repository.get_image,
             gpu_export_service=self.gpu_export_service,
         )
-        self._thumbnail_frame_renderer = SnapshotFrameRenderer(
-            image_loader=self._image_repository.get_image,
-            gpu_export_service=self._thumbnail_gpu_export_service,
-        )
         self._ffmpeg_command_builder = FFmpegCommandBuilder()
         self._process_manager = FFmpegProcessManager(self._active_processes)
         self._render_loop = VideoRenderLoop(self)
 
     def warm_up_gpu_widgets(self) -> bool:
-        """Pre-create the offscreen GPU render widgets used for preview and
-        thumbnails, well ahead of the video editor dialog being opened.
+        """Pre-create the offscreen GPU render widget used for preview/export,
+        well ahead of the video editor dialog being opened.
 
-        Returns True only when every offscreen service this exporter owns is
-        ready, so the caller can stop retrying: a False keeps the retry alive,
-        and a retry is cheap once the remaining service is the only cold one
-        (``GpuExportService.warm_up`` re-enters its already-created widget).
+        Returns True only when the offscreen service this exporter owns is
+        ready, so the caller can stop retrying (``GpuExportService.warm_up``
+        re-enters its already-created widget).
         """
-        # Both widgets must be warmed in this one call, because each pays a
-        # full D3D shader/pipeline compile of its own (~4 s per widget on the
-        # Windows build, 4044 + 4066 ms back to back when both were created
-        # here on 2026-10-24). Leaving the thumbnail service cold to its first
-        # use does not avoid that compile, it moves it: the first filmstrip
-        # tile paid ~1.5 s on a worker thread and every later tile stayed
-        # slower (measured 2026-10-29). This call runs on the startup timer,
-        # before the editor is usually opened, so both compiles land where the
-        # user is not waiting on a frame.
-        ready = []
-        for service in (self.gpu_export_service, self._thumbnail_gpu_export_service):
-            if service is None or not hasattr(service, "warm_up"):
-                continue
-            try:
-                ready.append(bool(service.warm_up()))
-            except Exception:
-                # One failed service must not stop the other from warming.
-                logger.debug(
-                    "Offscreen GPU warm-up failed for %s",
-                    type(service).__name__,
-                    exc_info=True,
-                )
-                ready.append(False)
-        return bool(ready) and all(ready)
+        # The widget pays a full D3D shader/pipeline compile (~4 s on the
+        # Windows build, measured 2026-10-24). This call runs on the startup
+        # timer, before the editor is usually opened, so the compile lands
+        # where the user is not waiting on a frame.
+        service = self.gpu_export_service
+        if service is None or not hasattr(service, "warm_up"):
+            return False
+        try:
+            return bool(service.warm_up())
+        except Exception:
+            logger.debug(
+                "Offscreen GPU warm-up failed for %s",
+                type(service).__name__,
+                exc_info=True,
+            )
+            return False
 
     def _drain_last_render_debug(self) -> dict:
         return self._frame_renderer.drain_last_debug()
@@ -403,7 +331,6 @@ class VideoExporterService:
     def _clear_frame_caches(self) -> None:
         self._image_repository.clear()
         self._frame_renderer.reset_backend_state()
-        self._thumbnail_frame_renderer.reset_backend_state()
 
     def request_cancel(self):
         with self._cancel_lock:
@@ -553,19 +480,17 @@ class VideoExporterService:
             global_bounds=global_bounds,
         )
 
-    def _render_snapshot_with_renderer(self, renderer, snap, request: VideoRenderRequest):
+    def _render_snapshot_with_renderer(self, snap, request: VideoRenderRequest):
         _vrlog.debug(
-            "render_begin renderer=%s out=%sx%s fit_content=%s ts=%s",
-            "thumbnail" if renderer is self._thumbnail_frame_renderer else "main",
+            "render_begin renderer=main out=%sx%s fit_content=%s ts=%s",
             request.target_surface.width,
             request.target_surface.height,
             request.fit_content,
             getattr(snap, "timestamp", None),
         )
-        result = renderer.render(snap, request)
+        result = self._frame_renderer.render(snap, request)
         _vrlog.debug(
-            "render_done renderer=%s out=%sx%s backend=%s",
-            "thumbnail" if renderer is self._thumbnail_frame_renderer else "main",
+            "render_done renderer=main out=%sx%s backend=%s",
             request.target_surface.width,
             request.target_surface.height,
             result.backend,
@@ -583,8 +508,6 @@ class VideoExporterService:
         fit_content=False,
         global_bounds=None,
         fill_color=(0, 0, 0, 0),
-        *,
-        thumbnail: bool = False,
     ):
         request = self._build_render_request(
             out_w,
@@ -595,8 +518,7 @@ class VideoExporterService:
             self._coerce_global_bounds(global_bounds),
             fill_color,
         )
-        renderer = self._thumbnail_frame_renderer if thumbnail else self._frame_renderer
-        return renderer.prepare_canvas_frame(snap, request)
+        return self._frame_renderer.prepare_canvas_frame(snap, request)
 
     def render_snapshot_to_pil(
         self,
@@ -618,7 +540,7 @@ class VideoExporterService:
             self._coerce_global_bounds(global_bounds),
             fill_color,
         )
-        return self._render_snapshot_with_renderer(self._frame_renderer, snap, request)
+        return self._render_snapshot_with_renderer(snap, request)
 
     def set_thumbnail_proxy_resolver(self, resolver) -> None:
         """Inject the thumbnail proxy-source resolver (P1 seam).
@@ -640,8 +562,9 @@ class VideoExporterService:
         """Proxy images for both thumbnail sides — never decodes.
 
         Returns ``((img1_or_None, img2_or_None), (kind1, kind2))``. Any
-        ``None`` side means that side missed and the caller must fall back
-        to the full-res path for the whole request.
+        ``None`` side means that side missed; the strip band's
+        ``proxy_pair_for`` (the only caller) draws a placeholder tile for
+        that block rather than decoding on the interaction path.
         """
         paths = (
             getattr(snap, "image1_path", None),
@@ -681,172 +604,6 @@ class VideoExporterService:
         if images[0] is None or images[1] is None:
             return (None, None), self._last_thumbnail_source
         return (images[0], images[1]), self._last_thumbnail_source
-
-    def _render_thumbnail_from_proxy(self, snap, request, images):
-        render_from_images = getattr(
-            self._thumbnail_frame_renderer, "render_from_images", None
-        )
-        if render_from_images is None:
-            return None
-        result = render_from_images(snap, request, images[0], images[1])
-        self._last_render_backend = result.backend
-        return result.image
-
-    def render_snapshot_thumbnail_to_pil(
-        self,
-        snap,
-        out_w,
-        out_h,
-        font_path=None,
-        auto_crop=False,
-        fit_content=False,
-        global_bounds=None,
-        fill_color=(0, 0, 0, 0),
-    ):
-        request = self._build_render_request(
-            out_w,
-            out_h,
-            font_path,
-            auto_crop,
-            fit_content,
-            self._coerce_global_bounds(global_bounds),
-            fill_color,
-        )
-        # P1: proxy-resolution source (pyramid coarse level / display
-        # cache) instead of a full-res decode. The pyramid pick covers
-        # the actual requested size. Miss on either side → the current
-        # full-res path (degrade, never stall the strip).
-        try:
-            (img1, img2), _kinds = self._resolve_thumbnail_images(
-                snap, auto_crop, (max(1, int(out_w)), max(1, int(out_h)))
-            )
-        except Exception:
-            img1 = img2 = None
-        if img1 is not None and img2 is not None:
-            try:
-                proxied = self._render_thumbnail_from_proxy(
-                    snap, request, (img1, img2)
-                )
-            except Exception:
-                proxied = None
-            if proxied is not None:
-                return proxied
-        return self._render_snapshot_with_renderer(
-            self._thumbnail_frame_renderer,
-            snap,
-            request,
-        )
-
-    def render_snapshot_thumbnail_to_pil_async(
-        self,
-        snap,
-        out_w,
-        out_h,
-        callback,
-        font_path=None,
-        auto_crop=False,
-        fit_content=False,
-        global_bounds=None,
-        fill_color=(0, 0, 0, 0),
-    ) -> None:
-        """Non-blocking counterpart to :meth:`render_snapshot_thumbnail_to_pil`.
-
-        ``callback(pil_image_or_None)`` fires later, on the main thread.
-        Used by ThumbnailService so its background worker never blocks on
-        the GPU round-trip.
-        """
-        request = self._build_render_request(
-            out_w,
-            out_h,
-            font_path,
-            auto_crop,
-            fit_content,
-            self._coerce_global_bounds(global_bounds),
-            fill_color,
-        )
-        # P1 proxy path (same seam as the sync method): no decode on hit —
-        # sync prepare-from-proxy on this worker is tens of ms, strictly
-        # cheaper than today's full-res decode inside ``render_async``.
-        # The callback still lands on the main thread via the bridge.
-        try:
-            (img1, img2), _kinds = self._resolve_thumbnail_images(
-                snap, auto_crop, (max(1, int(out_w)), max(1, int(out_h)))
-            )
-        except Exception:
-            img1 = img2 = None
-        if img1 is not None and img2 is not None:
-            try:
-                proxied = self._render_thumbnail_from_proxy(
-                    snap, request, (img1, img2)
-                )
-            except Exception:
-                proxied = None
-            if proxied is not None:
-                self._deliver_thumbnail_async(callback, proxied)
-                return
-        _vrlog.debug(
-            "render_begin renderer=thumbnail out=%sx%s fit_content=%s ts=%s async=True",
-            request.target_surface.width,
-            request.target_surface.height,
-            request.fit_content,
-            getattr(snap, "timestamp", None),
-        )
-
-        def _on_result(result) -> None:
-            _vrlog.debug(
-                "render_done renderer=thumbnail out=%sx%s backend=%s async=True",
-                request.target_surface.width,
-                request.target_surface.height,
-                result.backend,
-            )
-            self._last_render_backend = result.backend
-            callback(result.image)
-
-        self._thumbnail_frame_renderer.render_async(snap, request, _on_result)
-
-    def compose_thumbnail_cpu(
-        self, snap, out_w, out_h, *, auto_crop=False
-    ):
-        """Compose a filmstrip tile on the CPU; ``None`` means "use the GPU".
-
-        Resolves the proxy pair through the same P1 seam as the GPU
-        thumbnail path (:meth:`_resolve_thumbnail_images`, a session/pyramid
-        hit never decodes) and delegates the composite to
-        :mod:`...video_snapshot_rendering.cpu_thumbnail`. Any miss — a cold
-        proxy on either side, an unknown mode, an exception — returns
-        ``None`` so the caller keeps today's GPU render (fail open, never a
-        worse tile).
-        """
-        try:
-            (img1, img2), _kinds = self._resolve_thumbnail_images(
-                snap, auto_crop, (max(1, int(out_w)), max(1, int(out_h)))
-            )
-        except Exception:
-            return None
-        if img1 is None or img2 is None:
-            return None
-        return _compose_thumbnail_cpu(
-            snap,
-            out_w,
-            out_h,
-            auto_crop=auto_crop,
-            image1=img1,
-            image2=img2,
-        )
-
-    def _deliver_thumbnail_async(self, callback, image) -> None:
-        """Fire an async thumbnail ``callback`` on the main thread.
-
-        Falls back to a direct call when already on the main thread (or
-        with no QApplication, e.g. single-threaded unit tests).
-        """
-        try:
-            bridge = self._thumbnail_callback_bridge
-            if bridge is not None and bridge.post(callback, image):
-                return
-        except Exception:
-            pass
-        callback(image)
 
     def _build_export_job(self, recording, resolution, fps, export_options):
         out_w, out_h = resolution
@@ -962,7 +719,6 @@ class VideoExporterService:
                 return None
             self._cancel_requested = False
         self._frame_renderer.reset_backend_state()
-        self._thumbnail_frame_renderer.reset_backend_state()
 
         if not export_options:
             export_options = {
@@ -1020,5 +776,3 @@ class VideoExporterService:
 
     def cleanup(self):
         self._process_manager.cleanup()
-        if self._thumbnail_gpu_export_service is not None:
-            self._thumbnail_gpu_export_service.shutdown()

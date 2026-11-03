@@ -7,7 +7,6 @@ class PlaybackCoordinator:
         model,
         export_controller,
         preview_coordinator,
-        thumbnail_coordinator,
         emit_timeline_position,
         emit_playback_state,
         emit_buttons_state,
@@ -18,7 +17,6 @@ class PlaybackCoordinator:
         self.model = model
         self.export_controller = export_controller
         self.preview_coordinator = preview_coordinator
-        self.thumbnail_coordinator = thumbnail_coordinator
         self.emit_timeline_position = emit_timeline_position
         self.emit_playback_state = emit_playback_state
         self.emit_buttons_state = emit_buttons_state
@@ -102,7 +100,6 @@ class PlaybackCoordinator:
         self.emit_timeline_position(0)
 
         self.update_buttons_state()
-        self.thumbnail_coordinator.generate_thumbnails()
 
         # Bounds live in the service: invalidate there (single reset path),
         # then recompute in the background; preview reads via the service.

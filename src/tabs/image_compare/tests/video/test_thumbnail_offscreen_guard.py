@@ -1,12 +1,12 @@
-"""Thumbnails must not be transparent — offscreen GPU path must be wired.
+"""Offscreen snapshot renders must not be transparent — the GPU path must be wired.
 
-Dogma: docs/dev/rendering/rendering-model.md (snapshot replay path; thumbnails
-are snapshot renders) — the thumbnail strip renders via SnapshotFrameRenderer →
-GpuExportService → offscreen QRhiWidget; a missing import or single-flush
-leaves grabFramebuffer transparent (extrema (0,0) → /tmp/thumb_debug_0.png
-136B, visible strip empty despite 12× add_thumbnail in debug). This guard fails
-on transparent pil or missing show_offscreen_widget import before it reaches the
-UI.
+Dogma: docs/dev/rendering/rendering-model.md (snapshot replay path) — preview,
+export and the post-export notification preview render through
+SnapshotFrameRenderer → GpuExportService → offscreen QRhiWidget; a missing
+import or single-flush leaves grabFramebuffer transparent (extrema (0,0) → an
+empty strip of pixels, 136B PNG, while the UI still reports success). This
+guard fails on a transparent PIL frame or a missing show_offscreen_widget
+import before it reaches the UI.
 """
 
 from __future__ import annotations
