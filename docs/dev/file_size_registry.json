@@ -85,6 +85,16 @@
       }
     },
     {
+      "path": "src/devtools/bench_strip_batch.py",
+      "limit": 500,
+      "marker": "Audit-Meta:",
+      "raw": "pattern=instrument reason=\"phase-0 bench: CPU planning + one-pass atlas + exactness harness + self-test are one measurement, and the band-host seam (--band) reuses the same planning/packing/slicing so its stage verdict cannot drift from the atlas verdict; splitting them would let the halves disagree\"",
+      "parsed": {
+        "pattern": "instrument",
+        "reason": "phase-0 bench: CPU planning + one-pass atlas + exactness harness + self-test are one measurement, and the band-host seam (--band) reuses the same planning/packing/slicing so its stage verdict cannot drift from the atlas verdict; splitting them would let the halves disagree"
+      }
+    },
+    {
       "path": "src/devtools/capture_surface.py",
       "limit": 500,
       "marker": "Audit-Meta:",
@@ -750,6 +760,28 @@
         "pattern": "state-machine",
         "size": "exempt",
         "reason": "export plan builder plus co-located parity-harness LOD/tile decision that must stay next to the builder it pins"
+      }
+    },
+    {
+      "path": "src/tabs/image_compare/services/video_snapshot_rendering/strip_pass.py",
+      "limit": 500,
+      "marker": "Audit-Meta:",
+      "raw": "pattern=state-machine size=exempt reason=\"one strip GPU-resource lifecycle (samplers/array/SRBs/per-tile buffers/divider shell/upload) against one target; the upload guard, the capacity sink and the mip deferral share the array state, so splitting threads that state through every helper\"",
+      "parsed": {
+        "pattern": "state-machine",
+        "size": "exempt",
+        "reason": "one strip GPU-resource lifecycle (samplers/array/SRBs/per-tile buffers/divider shell/upload) against one target; the upload guard, the capacity sink and the mip deferral share the array state, so splitting threads that state through every helper"
+      }
+    },
+    {
+      "path": "src/tabs/image_compare/services/video_snapshot_rendering/strip_window.py",
+      "limit": 500,
+      "marker": "Audit-Meta:",
+      "raw": "pattern=single-owner size=exempt reason=\"one strip window: block plan + the proven per-tile packing (letterbox, uniform block, instance, divider spec) share the tile record and must agree byte-for-byte with the phase-0 bench; the GPU half is the one allowed sibling (strip_pass.py) because it needs a live RHI to be tested at all\"",
+      "parsed": {
+        "pattern": "single-owner",
+        "size": "exempt",
+        "reason": "one strip window: block plan + the proven per-tile packing (letterbox, uniform block, instance, divider spec) share the tile record and must agree byte-for-byte with the phase-0 bench; the GPU half is the one allowed sibling (strip_pass.py) because it needs a live RHI to be tested at all"
       }
     },
     {

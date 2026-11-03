@@ -19,6 +19,7 @@ Noul
 PixelSource
 QOpenGLWidget
 QRhiD3D11InitParams
+QRhiWidget
 Reject
 SlotSource
 Smooth

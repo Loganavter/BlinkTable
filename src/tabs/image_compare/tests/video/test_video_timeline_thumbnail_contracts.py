@@ -414,6 +414,80 @@ def test_cover_source_to_content_fills_thumbnail_target():
     assert cover_source_to_content(tall, (160, 90)).size == (160, 90)
 
 
+def test_thumbnail_plan_covers_the_tile_canvas_not_a_fit_inset():
+    """Structure: a 160x90 tile PLANS a full-bleed cover, whatever the source.
+
+    ``_finish_thumbnail_image`` trims the plan's transparent letterbox margins
+    and re-covers the PIXMAP, so the QPainter strip never showed the bars. The
+    GPU band draws the PLAN directly (one tile stretched over one block cell),
+    so a fit-inside plan reaches the cell as-is: a portrait source (1080x2400)
+    left 40 of 160 px of content, i.e. 32 of a 128 px cell — the live "the band
+    renders the wrong pixels" report (2026-11-03). The 160x90 target must
+    therefore plan a cover of the WHOLE canvas, which is also what the CPU
+    filmstrip composer does (``cpu_thumbnail._cover_pil(source, tile_size)``).
+    """
+    from engine.cache import TargetSurfaceSpec
+    from engine.cache.live_snapshot import build_live_frame_snapshot
+    from tabs.image_compare.plugins.video_editor.services.video_export_models import (
+        VideoRenderRequest,
+    )
+    from tabs.image_compare.services.video_snapshot_rendering.renderer import (
+        SnapshotFrameRenderer,
+    )
+
+    from core.store import Store
+    from tabs.image_compare.tab import ImageCompareTab
+    from tabs.registry import get_shared_tab_registry
+
+    # ``build_live_frame_snapshot`` resolves the tab's own service against the
+    # shared registry's ACTIVE session type, and this test builds a bare
+    # ``Store()`` (docs/dev/tabs/isolation.md).
+    ImageCompareTab().register_canvas_features()
+    registry = get_shared_tab_registry()
+    previous_active = registry._active_session_type
+    registry._active_session_type = "image_compare"
+    try:
+        store = Store()
+        store.create_workspace_session(session_type="image_compare", activate=True)
+        # The same session shape the live canvas builds (see
+        # tests/plugins/test_export_diff_support.py): the live snapshot reads
+        # the session's document and viewport state.
+        from core.store_viewport import SessionData
+        from tabs.image_compare.state.document import DocumentModel
+        from tabs.image_compare.state.models import ImageSessionState, RenderCacheState
+
+        store.set_session_state_slot("document", DocumentModel())
+        store.viewport.session_data = SessionData(
+            image_state=ImageSessionState(), render_cache=RenderCacheState()
+        )
+        renderer = SnapshotFrameRenderer(
+            image_loader=lambda *_args, **_kwargs: None
+        )
+        portrait = Image.new("RGBA", (90, 180), (20, 40, 60, 255))
+        request = VideoRenderRequest(
+            target_surface=TargetSurfaceSpec(
+                width=_THUMB[0], height=_THUMB[1], fill_rgba=(0, 0, 0, 0)
+            ),
+            font_path=None,
+            auto_crop=False,
+            fit_content=False,
+            global_bounds=None,
+        )
+        prepared = renderer.prepare_canvas_frame_from_images(
+            build_live_frame_snapshot(store), request, portrait, portrait
+        )
+    finally:
+        registry._active_session_type = previous_active
+
+    plan = prepared.plan
+    assert (int(plan.canvas_w), int(plan.canvas_h)) == _THUMB
+    # The plan's pixels ARE the tile: no transparent letterbox band for a block
+    # cell to stretch ahead of the frame.
+    assert (int(plan.image1.width), int(plan.image1.height)) == _THUMB
+    assert (int(plan.image2.width), int(plan.image2.height)) == _THUMB
+    assert (prepared.image_dest_x, prepared.image_dest_y) == (0, 0)
+
+
 def test_pipeline_cache_resolver_returns_pyramid_level(monkeypatch):
     """Structure: session-warmed store → same object reaches pyramid_for, L3 out."""
     import tabs.image_compare.plugins.video_editor.services.video_export.service as svc

@@ -82,6 +82,30 @@ def prepare_from_cache_miss(
         target=target,
     )
     target_size, content_size, pad_left, pad_top = resolve_scaled_content_geometry(frame)
+    # A FILMSTRIP TILE IS FULL-BLEED. The strip pass draws one tile STRETCHED
+    # over one timeline block cell, and a cell is not 16:9 (measured live
+    # 2026-11-03: a 160x90 tile in a 127x72 cell). With the fit-inside content
+    # box every frame kept its letterbox bars, so the stretched cell showed a
+    # narrow strip of the frame and empty space beside it — the "band renders
+    # the wrong pixels" report (a portrait source collapses to 40 of 160 px,
+    # i.e. 32 of a 128 px cell). Covering the WHOLE canvas is also what the
+    # CPU filmstrip composer already does
+    # (``cpu_thumbnail._cover_pil(source, tile_size)`` fills the tile).
+    if is_thumbnail_target_size(
+        request.target_surface.width, request.target_surface.height
+    ):
+        content_size = (max(1, int(target_size[0])), max(1, int(target_size[1])))
+        pad_left = 0
+        pad_top = 0
+        # The frame's own layout is the fit-inside one; the plan, the render
+        # destination and the debug table must all read this same full-bleed
+        # geometry, or a consumer pastes a full-canvas image at the old fit
+        # offset.
+        output_layout = compute_content_layout(
+            target,
+            image_width=content_size[0],
+            image_height=content_size[1],
+        )
     _src1_sz = (
         (presentation.source_image1.width, presentation.source_image1.height)
         if presentation.source_image1
@@ -130,8 +154,9 @@ def prepare_from_cache_miss(
         padding_bottom=max(0, int(target_size[1] - content_size[1] - pad_top)),
         virtual_layout=frame.virtual_layout,
     )
-    # Strip thumbnails (exactly the 160x90 target) render full-bleed cover
-    # so no transparent letterbox pads reach the strip; every other target
+    # Strip thumbnails (exactly the 160x90 target) render full-bleed cover of
+    # the whole canvas so no transparent letterbox pads reach the strip (the
+    # content box was already widened to the canvas above); every other target
     # — including all export sizes — keeps fit-inside + aspect pads.
     if is_thumbnail_target_size(
         request.target_surface.width, request.target_surface.height

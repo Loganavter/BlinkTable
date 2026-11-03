@@ -153,6 +153,28 @@ _KNOWN_SUSPICIOUS_CALLS = frozenset(
         "resolve_prescale_target",
         "demand_level",
         "write_resampled_to_store",
+        # Phase 1 of the strip atlas (plan-video-strip-atlas-2026-10-30): the
+        # strip window packs ONE tile per visible block — letterbox, uniform,
+        # instance, divider and the production upload call. That is per-tile
+        # render packing, not export LOD/tile *decision* math (which stays in
+        # the engine, pinned by the tests above); the names are listed so the
+        # export-scope vocabulary stays exactly known instead of drifting.
+        "StripTile",
+        "_ensure_tile_array",
+        "_ensure_tile_buffers",
+        "_placeholder_tile",
+        "_stage_tile_uniforms",
+        "_tile_sides",
+        "divider_spec_for_tile",
+        "grid_for",
+        "pack_tile_divider",
+        "pack_tile_instance",
+        "pack_tile_uniforms",
+        "scaled_tile_rects",
+        "tile_letterbox_geometry",
+        "tile_rect",
+        "tile_source_key",
+        "upload_tile_to_array",
     }
 )
 
@@ -164,6 +186,23 @@ _KNOWN_SUSPICIOUS_DEFS = frozenset(
         "resolve_export_snapshot_lod_tiles",
         "resolve_prescale_target",
         "snapshot_lod_tiles_for_sources",
+        # Strip-window packing vocabulary (see the call set): strip tiles are
+        # per-block render packing, not a second export tile/LOD planner.
+        "StripTile",
+        "_ensure_tile_buffers",
+        "_placeholder_tile",
+        "_stage_tile_uniforms",
+        "_tile_sides",
+        "divider_spec_for_tile",
+        "grid_for",
+        "pack_tile_divider",
+        "pack_tile_instance",
+        "pack_tile_uniforms",
+        "placeholder_tiles",
+        "scaled_tile_rects",
+        "tile_letterbox_geometry",
+        "tile_rect",
+        "tile_source_key",
     }
 )
 
