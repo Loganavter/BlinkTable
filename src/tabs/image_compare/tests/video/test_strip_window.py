@@ -414,3 +414,106 @@ def test_framebuffer_rects_tile_a_fractional_target_without_overlap():
     assert all(h == 72 for (_x, _y, _w, h) in rects)
     # Every cell keeps its share of the target (127 or 128 of 1020 px).
     assert all(127 <= w <= 129 for (_x, _y, w, _h) in rects)
+
+
+# ---------------------------------------------------------------------------
+# Planned-tile cache: a scroll tick plans only the newly exposed block
+# ---------------------------------------------------------------------------
+
+
+def _window_with_cache(cache, *, first_block=0, count=8, recording=None, tile=_TILE):
+    recording = recording if recording is not None else _Recording(blocks=64)
+    return build_window(
+        recording,
+        first_block,
+        count,
+        tile[0],
+        tile[1],
+        request=SimpleNamespace(
+            target_surface=SimpleNamespace(width=tile[0], height=tile[1])
+        ),
+        layout=StripBlockLayout(tile_size=tile, fps=10.0, block_count=count, cols=count),
+        plan_builder=_plan_builder,
+        tile_cache=cache,
+    )
+
+
+def test_scroll_tick_plans_only_the_newly_exposed_block():
+    """One cache per recording: blocks that stayed visible are not re-planned.
+
+    This is the interaction budget's whole shape — a window build plans every
+    visible block (16-25 ms of CPU), and a scroll moves the range by a block.
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    cache = StripTileCache()
+    recording = _Recording(blocks=64)
+    first = _window_with_cache(cache, first_block=0, recording=recording)
+    assert (first.cache_hits, first.cache_misses) == (0, 8)
+
+    scrolled = _window_with_cache(cache, first_block=1, recording=recording)
+    assert (scrolled.cache_hits, scrolled.cache_misses) == (7, 1)
+    # Content identity: the reused tile still carries ITS block's plan/pixels.
+    for tile in scrolled.tiles:
+        assert tile.block == tile.index + 1
+        pixel = tile.image1.getpixel((0, 0))
+        assert pixel[0] == (tile.block * 7) % 256, tile.block
+        assert tile.plan.render_scene.split_position_visual == pytest.approx(
+            0.1 + 0.01 * (tile.block % 64)
+        )
+
+
+def test_a_new_tile_size_is_a_miss():
+    """A zoom re-plans every tile: the geometry, not just the range, changed."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    cache = StripTileCache()
+    recording = _Recording(blocks=64)
+    _window_with_cache(cache, first_block=0, recording=recording)
+    zoomed = _window_with_cache(cache, first_block=0, recording=recording, tile=(224, 126))
+
+    assert (zoomed.cache_hits, zoomed.cache_misses) == (0, 8)
+
+
+def test_a_placeholder_is_never_cached():
+    """A missing proxy is transient: caching it would pin a blank cell."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    cache = StripTileCache()
+    recording = _Recording(blocks=64, no_source=(3,))
+    _window_with_cache(cache, first_block=0, recording=recording)
+    again = _window_with_cache(cache, first_block=0, recording=recording)
+
+    assert (again.cache_hits, again.cache_misses) == (7, 1)
+    assert again.tiles[3].is_placeholder
+
+
+def test_a_different_recording_starts_from_a_cold_cache():
+    """Cut/undo/re-open: the plan belongs to the recording it was made for."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    cache = StripTileCache()
+    _window_with_cache(cache, first_block=0, recording=_Recording(blocks=64))
+    other = _window_with_cache(cache, first_block=0, recording=_Recording(blocks=64))
+
+    assert (other.cache_hits, other.cache_misses) == (0, 8)
+
+
+def test_the_cache_keeps_one_plan_builder_per_scope():
+    """The renderer's caches must outlive a window (a cold first tile is ~13 ms)."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    cache = StripTileCache()
+    assert cache.planner() is cache.planner()
+    cache.clear()
+    assert cache.planner() is not None

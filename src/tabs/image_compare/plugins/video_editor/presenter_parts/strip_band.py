@@ -19,7 +19,9 @@ size). Building a newer window supersedes the older one inside
 ``strip_window``; a superseded window raises ``StripWindowCancelled`` at render
 time and draws nothing. A build that raises is logged and the previous window
 stays live (fail-open — placeholder tiles are the renderer's job, a stale
-frame beats a blank band).
+frame beats a blank band). Planned tiles outlive a window (``StripTileCache``,
+cleared on a recording change), so a scroll tick plans only the block that
+newly entered the range; a zoom (new tile size) re-plans every tile.
 
 Geometry single source: :func:`timeline_strip_layout` asks the timeline's own
 ``strip_block_layout`` for the visible blocks (its representative frames and
@@ -43,6 +45,7 @@ from tabs.image_compare.plugins.video_editor.services.strip_recording import (
     timeline_strip_layout,
 )
 from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+    StripTileCache,
     StripWindowCancelled,
     build_window,
     cancel,
@@ -96,6 +99,9 @@ class StripBandHost:
         self._band = None
         self._window = None
         self._key = None
+        #: Planned tiles survive a scroll tick (one new block is planned, the
+        #: rest are reused); cleared when the recording's content changes.
+        self._tile_cache = StripTileCache()
         #: Diagnostics: window builds, build failures kept fail-open, frames
         #: whose window was rendered, and the last failure text.
         self.build_count = 0
@@ -146,6 +152,7 @@ class StripBandHost:
             except (TypeError, RuntimeError):
                 pass
         self._drop_window("host detached")
+        self._tile_cache.clear()
         disable = getattr(timeline, "disable_strip_band", None) if timeline is not None else None
         if callable(disable):
             try:
@@ -171,6 +178,7 @@ class StripBandHost:
     def on_recording_changed(self, *_args) -> None:
         """The recording was cut/undone or the fps changed: new content."""
         self._key = None
+        self._tile_cache.clear()
         self._ensure_window("recording change")
 
     def _place(self, band, timeline) -> None:
@@ -228,6 +236,7 @@ class StripBandHost:
                 request=self._request(tile_w, tile_h),
                 layout=layout,
                 rhi=self._rhi(),
+                tile_cache=self._tile_cache,
             )
         except Exception as exc:
             # Fail-open: the previous window keeps drawing (a stale strip is a
