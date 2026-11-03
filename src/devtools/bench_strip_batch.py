@@ -1869,6 +1869,19 @@ def _make_production_widget(window):
             self._rhi = None
             self._last_error: str | None = None
 
+        def set_window(self, window) -> None:
+            """Draw ``window`` on the next frame (one target, newest window).
+
+            The latency gate's latest-wins tick: a scroll/zoom rebuilds the
+            window, and the newest one is what the next frame draws — exactly
+            what ``StripBandHost._ensure_window`` hands the band.
+            """
+            self._window = window
+
+        @property
+        def last_error(self) -> str | None:
+            return self._last_error
+
         def render(self, command_buffer):
             try:
                 rhi = self.rhi()
@@ -2039,6 +2052,7 @@ def build_band_window(
     exporter: _BandExporter,
     *,
     cols: int | None = None,
+    first_block: int = 0,
 ):
     """``build_window`` driven exactly as ``StripBandHost`` drives it.
 
@@ -2049,6 +2063,9 @@ def build_band_window(
     (the same ``VideoRenderRequest`` the host builds), and the recording is
     the host's ``StripRecordingAdapter``. Only the block layout is synthetic —
     the bench has no timeline — and it is the same ``StripBlockLayout`` shape.
+    ``first_block`` is the window's first visible block: a scroll/zoom tick
+    moves it, and the latency gate needs that to measure a real interaction
+    step instead of a first-block-zero fill.
     """
     from tabs.image_compare.plugins.video_editor.presenter_parts.strip_band import (
         render_request as band_render_request,
@@ -2080,7 +2097,7 @@ def build_band_window(
     )
     return build_window(
         recording,
-        0,
+        int(first_block),
         int(count),
         int(tile_w),
         int(tile_h),
@@ -2242,6 +2259,20 @@ def print_band_stages(stages: dict, divergences, quiet: bool = False) -> None:
             print(f"  DIVERGES: {finding}")
     else:
         print("  band stages: all agree with the filmstrip contract")
+
+
+# Public aliases for the sibling latency gate (``bench_strip_latency``, phase 4).
+# Both instruments drive the SAME seam — one bench store, one exporter that
+# resolves a pyramid level, one grab-only window widget — so the gate composes
+# these parts instead of re-deriving a second proxy/widget construction that
+# could drift from what it is supposed to measure.
+BandExporter = _BandExporter
+NoDisplayError = _NoDisplayError
+activate_image_compare_tab = _activate_image_compare_tab
+build_store = _build_store
+make_window_widget = _make_production_widget
+qt_app = _qt_app
+require_rhi = _must_have_rhi
 
 
 #: Off-grid band target verdict: every cell is compared with its own per-tile

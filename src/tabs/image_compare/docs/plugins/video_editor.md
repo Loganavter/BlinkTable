@@ -44,6 +44,46 @@ tab, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 | `services/canvas_feature_gateway.py` | routes editor actions to canvas feature commands |
 | `actions.py`, `search.py`, `translations.py`, `widgets/timeline/` | Find Action contributions, search, i18n, timeline widgets |
 
+## Strip latency gate (live acceptance)
+
+The filmstrip is one synchronous GPU pass, so its numbers are a gate, not a
+preference: a full fill in **<= 50 ms** and any scroll/zoom/resize tick in
+**< 10 ms** (`plan-video-strip-atlas-2026-10-30`). Both are measured by
+`src/devtools/bench_strip_latency.py`.
+
+It needs a **real or private display**: offscreen QRhi has no framebuffer, so
+an offscreen "pass" would be fabricated and the tool exits `2` instead of
+reporting one. Take a lease (never `:0`, one per agent):
+
+```bash
+lease=$(live-lease alloc --lane strip-latency --task fill-interaction | tail -1)
+eval "$(live-lease env "$lease")"
+python src/devtools/bench_strip_latency.py
+live-lease release "$lease"
+```
+
+Verdict is the exit code plus the table
+`case | build_ms | render_ms | total_ms | budget_ms | verdict`:
+
+- **green** — exit `0`, every row `pass`. Rows: fill at 8/17/32 blocks, a
+  scroll step and a zoom step. `build_ms` is `build_window` (planning +
+  packing), `render_ms` is one `render_window` pass (its first-frame upload
+  included), `total_ms` is what the budget compares.
+- **red** — exit `1`, with the over-budget rows printed. Each row's detail
+  line splits min/median/max so a red case is either "planning" or "the pass",
+  never a mystery number.
+- **no display** — exit `2`.
+
+The framebuffer grab in the detail lines is a readback proof, not a per-tick
+cost: it stays outside the budget. `--fill-budget-ms` /
+`--interaction-budget-ms` override the numbers (prove a red gate on a measured
+case), `--repeat` reports the median, and `--cpu-only` runs the planning half
+with no verdict — a CPU number cannot answer the interaction budget. Numbers
+are comparable between two runs on one host and backend, not across GPUs.
+
+The other half of the acceptance is structural: the strip path contains no
+timer, settle gate or sleep — `tests/contracts/test_strip_no_debounce.py`.
+
 ## Load order dependency
 
 `video_editor` (order 0) must load before `export` (order 10): the export
