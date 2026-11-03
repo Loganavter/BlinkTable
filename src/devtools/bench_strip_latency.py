@@ -55,14 +55,19 @@ proxy level for that tile), which are printed once as ``cold`` — and each
 number is the median of ``--repeat`` runs. That is comparable between two runs
 on the same host, not across GPUs or backends.
 
-Measured status of the CPU half (this repo's dev cell, 2026-11-03, no RHI
-surface): a window build at 8/17/32 blocks costs ~33/37/41 ms, and a cProfile
-of the 8-block build attributes ~23 ms of its 38 ms to
-``TiledPixelStore`` spill-mmap flushes inside the plan builder (14 flush calls
-for 8 tiles). So the interaction budget is expected to be RED on this path
-until per-tick planning stops paying for a fresh spill store per tile. The
-table says which stage is responsible instead of hiding it in one number; the
-supervisor's leased run is what decides the GPU column.
+Measured status (2026-11-04, this host, leased display for the GPU column):
+
+* the per-tile spill ``msync`` was 14 calls / ~24 ms of a 38 ms window build;
+  dropping the durability-only flushes took a fill from 34/37/42 ms to
+  3/7/12 ms at 8/17/32 blocks;
+* a planned tile is reused across windows (``StripTileCache``) and the plan
+  builder outlives a window, so a scroll tick plans only the newly exposed
+  block: build 0.3/0.6/1.9 ms, and the tick's cost is now the pass itself
+  (upload + draw 5/15/25 ms at 8/17/32 — the upload half is what still keeps
+  17/32 blocks over the 10 ms interaction budget);
+* a zoom changes the tile size, so every tile is re-planned (~12 ms at 8
+  blocks): the interaction budget is a scroll/resize number, a geometry change
+  costs a planning pass.
 """
 
 # Audit-Meta: pattern=devtool-pipeline reason="one latency gate: the band's own build seam, the per-case warm-up/median measurement, the latest-wins proof and the budget table are one measurement — splitting the rig from the table would let them disagree about what was timed"

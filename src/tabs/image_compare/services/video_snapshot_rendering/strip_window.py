@@ -12,7 +12,10 @@ This module is that pass as production API:
   through ``recording.evaluate_at(t)``, builds the per-tile plan through the
   same plan builder the export/thumbnail path uses, allocates the texture-array
   layers through ``TileTextureService`` and packs the per-tile uniform block +
-  instance. Importable and testable offscreen (no QRhi).
+  instance. Importable and testable offscreen (no QRhi). A caller that passes a
+  :class:`StripTileCache` reuses the plan/pixels of blocks that stayed visible
+  (one plan builder per recording, not per window) — that is what keeps a
+  scroll tick inside the interaction budget.
 * :func:`render_window` — one ``beginPass``/``endPass`` over the window; the
   GPU half lives in ``strip_pass`` and is imported lazily so this module stays
   RHI-free at import time.

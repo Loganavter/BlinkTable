@@ -19,7 +19,9 @@ size). Building a newer window supersedes the older one inside
 ``strip_window``; a superseded window raises ``StripWindowCancelled`` at render
 time and draws nothing. A build that raises is logged and the previous window
 stays live (fail-open — placeholder tiles are the renderer's job, a stale
-frame beats a blank band).
+frame beats a blank band). Planned tiles outlive a window (``StripTileCache``,
+cleared on a recording change), so a scroll tick plans only the block that
+newly entered the range; a zoom (new tile size) re-plans every tile.
 
 Geometry single source: :func:`timeline_strip_layout` asks the timeline's own
 ``strip_block_layout`` for the visible blocks (its representative frames and
