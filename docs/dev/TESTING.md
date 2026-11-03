@@ -462,6 +462,7 @@ stronger sibling, delete the weaker one — do not keep it "for documentation".
 ## What is NOT covered
 
 - Real QRhi rendering — shader pixels (needs GPU context; backend- and driver-dependent). The seam around QRhi (render plan, `render_scene` params, fake-GPU payload) is covered; see `src/tabs/image_compare/tests/video/test_video_export_preview_parity_matrix.py`.
+- **Live latency gate** — the video editor's strip is the one path held to a number instead of a render test: `src/devtools/bench_strip_latency.py` (50 ms fill / 10 ms interaction, on a leased display; see `src/tabs/image_compare/docs/plugins/video_editor.md` § Strip latency gate). Its structural half — no timer/settle gate/sleep on the strip path — is `contracts/test_strip_no_debounce.py`.
 - Multi-window scenarios and OS drag-and-drop (**transport**). Drop routing (`route_drop`/`accepts_drop`) is covered in `contracts/test_tabs.py` + `runtime/test_tabs_lifecycle.py`.
 - **Transport** of interactive gestures — live mouse/trackpad event delivery. Gesture **resolution** (priority, `matches`/`is_active` predicates) is covered in `src/tabs/image_compare/tests/runtime/test_gesture_resolution.py`.
 
