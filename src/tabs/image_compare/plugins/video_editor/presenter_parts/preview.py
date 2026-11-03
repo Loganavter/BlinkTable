@@ -393,8 +393,8 @@ class PreviewCoordinator:
     ):
         """Pure CPU/PIL work (image decode, resample, plan building) — no Qt
         widget access, safe to run off the GUI thread. Mirrors
-        ``prepare_snapshot_canvas_frame(thumbnail=False)`` — same renderer as
-        export, per render/export parity."""
+        ``prepare_snapshot_canvas_frame`` — same renderer as export, per
+        render/export parity."""
         return exporter.prepare_snapshot_canvas_frame(
             snap,
             render_w,

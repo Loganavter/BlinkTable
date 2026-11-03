@@ -135,7 +135,7 @@ The video editor is part of the image-compare domain:
 plugins/video_editor/
     plugin.py
     presenter.py              # editor logic; presenter_parts/ holds the split-out parts
-    presenter_parts/          # bootstrap, playback, preview, thumbnails, exporting, ...
+    presenter_parts/          # bootstrap, playback, preview, strip_band, exporting, ...
     dialog/                   # package: shell, export, nav, sections, persistence,
                               #          runtime, surface_widgets, tab_cursor
     services/                 # editor, recorder, timeline, keyframing/, video_export/

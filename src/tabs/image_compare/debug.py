@@ -149,27 +149,6 @@ def ic_perf_debug(msg: str, *args, **kwargs) -> None:
         )
 
 
-def ic_thumbnail_debug_enabled() -> bool:
-    # NARROW semantics (host-dbgflags W5): THUMBNAIL-only. The former
-    # VIDEO_EDITOR / IC_VIDEO umbrella disjuncts were re-zoned per call
-    # site — thumbnail-pipeline sites (video_editor/services/thumbnails.py,
-    # video_editor/presenter_parts/thumbnails.py) now call ic_thumbnail_debug
-    # directly, so the editor umbrella no longer implies pipeline noise.
-    # Predicate set == emit set (see ic_thumbnail_debug below).
-    return _env_flag("IMGSLI_THUMBNAIL_DEBUG")
-
-
-def ic_thumbnail_debug(msg: str, *args, **kwargs) -> None:
-    if ic_thumbnail_debug_enabled():
-        _emit(
-            "[thumbnail-debug]",
-            msg,
-            *args,
-            env_flags=("IMGSLI_THUMBNAIL_DEBUG",),
-            **kwargs,
-        )
-
-
 def ic_magnifier_debug_enabled() -> bool:
     return _env_flag("IMGSLI_MAGNIFIER_DEBUG")
 

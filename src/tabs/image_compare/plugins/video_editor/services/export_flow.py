@@ -99,7 +99,7 @@ def build_video_notification_preview(
                 except Exception:
                     global_bounds = None
 
-        frame = video_exporter.render_snapshot_thumbnail_to_pil(
+        frame = video_exporter.render_snapshot_to_pil(
             snapshot,
             resolution[0],
             resolution[1],

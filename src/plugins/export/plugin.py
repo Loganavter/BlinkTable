@@ -118,16 +118,16 @@ class ExportPlugin(Plugin, IControllablePlugin, IServicePlugin):
 
         warm_up = getattr(self.video_exporter, "warm_up_gpu_widgets", None)
         if callable(warm_up):
-            # One warm-up per process: the offscreen widgets' cold cost is a
-            # ~4 s D3D shader/pipeline compile per canvas (measured 2026-10-24:
-            # magnifier_pass.initialize is where the GUI thread blocks, twice —
-            # main + thumbnail export services). Re-running it on every session
+            # One warm-up per process: the offscreen widget's cold cost is a
+            # ~4 s D3D shader/pipeline compile (measured 2026-10-24:
+            # magnifier_pass.initialize is where the GUI thread blocks).
+            # Re-running it on every session
             # activation turned that into a recurring freeze the user reads as
             # "it lags when I press record" (the toggle itself is 0.5 ms).
             # Off the startup critical path, well before the video editor
-            # dialog is likely to be opened, so the GPU offscreen widgets'
+            # dialog is likely to be opened, so the GPU offscreen widget's
             # cold-start cost (window/QRhi surface creation) isn't paid
-            # inline with the user's first thumbnail/preview request. Not
+            # inline with the user's first preview request. Not
             # every tab can actually provide a canvas widget class (see
             # tab_canvas_services.get_canvas_widget_class), so this fixed
             # delay only succeeds if a tab that can already happens to be

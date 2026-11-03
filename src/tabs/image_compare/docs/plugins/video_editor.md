@@ -37,9 +37,10 @@ tab, see [ARCHITECTURE.md](../ARCHITECTURE.md).
 | `services/recording_flow.py` | `RecordingFlow` — toggle/pause recording orchestration |
 | `services/export.py` | `VideoExporterService` |
 | `services/export_flow.py` | `VideoExportFlow` — export from editor frames |
-| `services/timeline.py`, `services/playback.py`, `services/thumbnails.py` | timeline model, playback, thumbnail generation |
+| `services/timeline.py`, `services/playback.py` | timeline model, playback |
 | `services/keyframing/` | keyframe adapters (`IVideoTrackProvider`-style) |
 | `services/video_export/`, `services/video_snapshot_rendering.py` | video export + snapshot rendering for this tab |
+| `services/strip_recording.py`, `presenter_parts/strip_band.py` | the filmstrip's one renderer: timeline blocks → one GPU band pass |
 | `services/canvas_feature_gateway.py` | routes editor actions to canvas feature commands |
 | `actions.py`, `search.py`, `translations.py`, `widgets/timeline/` | Find Action contributions, search, i18n, timeline widgets |
 

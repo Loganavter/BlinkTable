@@ -474,8 +474,8 @@ Only splits that survive the "one lifecycle" test proceed.
 | 1116 | `image_compare/canvas/widget.py` | thin-owner | **SPLIT** — 3 inlined clusters |
 | 759 | `image_compare/presenters/toolbar/connections.py` | state-machine | KEEP — signal-lifetime wiring hub (optional `deferred_plugins.py` carve-out only if touched) |
 | 1458 | `image_compare/.../magnifier/render/magnifier_pass.py` | File-Size-Exempt | **SPLIT** — module-level helpers only; the class keeps its exemption |
-| 1039 | `image_compare/plugins/video_editor/services/thumbnails.py` | state-machine | KEEP — one generation token + pending guard |
-| 968 | `image_compare/plugins/video_editor/services/video_export/service.py` | state-machine | KEEP — the stateless thumbnail-proxy cluster is separable, but "video export engine" is in the do-not-touch list above |
+| 1039 | `image_compare/plugins/video_editor/services/thumbnails.py` | state-machine | **DELETED** (2026-11-03, strip atlas phase 3) — the per-frame thumbnail pipeline is gone; the strip is one GPU band pass |
+| 968 | `image_compare/plugins/video_editor/services/video_export/service.py` | state-machine | KEEP — the stateless thumbnail-proxy cluster is separable (it now feeds only the band's `proxy_pair_for`), but "video export engine" is in the do-not-touch list above |
 | 1 290 | `plugins/help/dialog.py` | qdialog-wiring | KEEP (re-adjudicated 2026-10-22, was 925 at the 2026-10-17 triage) — still one `QDialog`; search/nav/chrome/tree/lightbox live in the sibling modules of `plugins/help/`, and the remainder is the TOC + mouse-nav filter + dialog chrome wiring |
 
 Split cuts (each keeps public names; the original module re-exports):

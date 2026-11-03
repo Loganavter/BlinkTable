@@ -15,16 +15,15 @@ carries a second geometry formula:
   several frames, and ``block / fps`` would ask the recording for the wrong
   instant (owner-visible: every tile showing frame 0's neighbourhood).
 * :func:`strip_tile_size` is the tile geometry: one FILMSTRIP THUMBNAIL, the
-  same ``THUMBNAIL_TARGET_SIZE`` the QPainter strip renders, never the block
-  cell's own aspect (see its docstring — the cell aspect is what letterboxes
-  every frame into a narrow sliver).
+  same ``THUMBNAIL_TARGET_SIZE`` the QPainter strip drew before phase 3, never
+  the block cell's own aspect (see its docstring — the cell aspect is what
+  letterboxes every frame into a narrow sliver).
 * :class:`StripRecordingAdapter` is the object handed to ``build_window``:
   ``evaluate_at`` delegates to the recording, ``images_for`` delegates to the
   exporter's proxy seam (never a decode on the interaction path).
 * :func:`proxy_pair_for` builds that proxy seam out of
-  ``VideoExporterService._resolve_thumbnail_images`` — the same call the
-  thumbnail/export paths use, so a strip tile and its thumbnail share one
-  source resolution (pyramid coarse level / display cache, or a miss).
+  ``VideoExporterService._resolve_thumbnail_images`` — one source resolution
+  for every strip tile (pyramid coarse level / display cache, or a miss).
 
 Nothing here is GPU-aware and nothing here waits: one pure-CPU call per view
 change, no timer, no settle gate, no worker.
