@@ -321,8 +321,15 @@ def _allocate_spill_memmap(
             os.close(fd)
             
         memmap = np.memmap(path, dtype=np.uint8, mode="r+", shape=(height, width, 4))
+        # Zero the mapping but do NOT msync it: ``fallocate``/``ftruncate``
+        # already promise zero content, this write only covers platforms where
+        # that promise is weaker, and an mmap write is visible to every reader
+        # of the file through the page cache — a flush buys durability the spill
+        # file does not need (it is a decode cache: a crash re-decodes). Each
+        # flush costs ~1.5-3 ms regardless of size, and the strip's per-tile
+        # plan path allocates several 60-90 KB stores per window (measured
+        # 2026-11-04: 14 flushes = 24 of a 38 ms window build).
         memmap[:] = 0
-        memmap.flush()
         return memmap, path
     except Exception:
         try:
@@ -485,7 +492,6 @@ def _write_rgba_strips(
             else:
                 memmap[y : y + chunk, :, :] = _to_u8(band)
             y += chunk
-        memmap.flush()
         return
 
     rgba = source if source.mode == "RGBA" else source.convert("RGBA")
@@ -509,7 +515,9 @@ def _write_rgba_strips(
             chunk, out_w, 4
         )
         y += chunk
-    memmap.flush()
+    # No msync here: the write is already visible to every reader through the
+    # page cache, and a spill file is a cache (a crash re-decodes). See
+    # ``_allocate_spill_memmap`` for the measured cost of these flushes.
 
 
 def _find_trim_box_vips(
@@ -767,7 +775,8 @@ class TiledPixelStore:
                 band, dtype=np.uint8
             ).reshape(chunk, out_w, 4)
             y += chunk
-        memmap.flush()
+        # No msync (see ``_allocate_spill_memmap``): page-cache coherence is
+        # enough for readers, and the spill file is a cache, not a record.
 
     def write_array(self, box: tuple[int, int, int, int], arr: np.ndarray) -> None:
         """Write an (H, W, 4) uint8 array into ``box`` without a PIL round-trip."""
