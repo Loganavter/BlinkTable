@@ -2053,6 +2053,8 @@ def build_band_window(
     *,
     cols: int | None = None,
     first_block: int = 0,
+    tile_cache=None,
+    recording=None,
 ):
     """``build_window`` driven exactly as ``StripBandHost`` drives it.
 
@@ -2066,6 +2068,11 @@ def build_band_window(
     ``first_block`` is the window's first visible block: a scroll/zoom tick
     moves it, and the latency gate needs that to measure a real interaction
     step instead of a first-block-zero fill.
+
+    ``tile_cache`` is the host's own :class:`StripTileCache` (a scroll tick
+    plans only the newly exposed block) and ``recording`` lets the gate keep
+    ONE adapter across ticks, exactly like ``StripBandHost`` does — a fresh
+    adapter per tick would give the plan cache a new scope and hide the reuse.
     """
     from tabs.image_compare.plugins.video_editor.presenter_parts.strip_band import (
         render_request as band_render_request,
@@ -2089,12 +2096,17 @@ def build_band_window(
     frames = _BenchRecording(
         store, str(image1_path), str(image2_path), None, None
     )
-    recording = StripRecordingAdapter(
-        frames,
-        proxy_pair=proxy_pair_for(exporter),
-        layout=layout,
-        fps=layout.fps,
-    )
+    if recording is None:
+        recording = StripRecordingAdapter(
+            frames,
+            proxy_pair=proxy_pair_for(exporter),
+            layout=layout,
+            fps=layout.fps,
+        )
+    else:
+        recording.layout = layout
+        recording.fps = float(layout.fps)
+        recording.block_count = int(layout.block_count)
     return build_window(
         recording,
         int(first_block),
@@ -2103,6 +2115,27 @@ def build_band_window(
         int(tile_h),
         request=band_render_request(int(tile_w), int(tile_h)),
         layout=layout,
+        tile_cache=tile_cache,
+    )
+
+
+def band_recording(store, image1_path, image2_path, exporter, *, varied: bool = False):
+    """The host's ``StripRecordingAdapter`` over this bench's frame state.
+
+    Exposed so a latency rig can keep ONE adapter (and one plan cache) across
+    ticks, exactly like ``StripBandHost`` — see ``build_band_window``'s
+    ``recording`` parameter.
+    """
+    from tabs.image_compare.plugins.video_editor.services.strip_recording import (
+        StripRecordingAdapter,
+        proxy_pair_for,
+    )
+
+    frames = _BenchRecording(
+        store, str(image1_path), str(image2_path), None, None, varied=bool(varied)
+    )
+    return StripRecordingAdapter(
+        frames, proxy_pair=proxy_pair_for(exporter), layout=None, fps=FPS
     )
 
 

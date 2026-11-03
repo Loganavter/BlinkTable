@@ -144,11 +144,24 @@ class _Rig:
     image1: Path
     image2: Path
     tile: tuple[int, int]
+    cache: object
+    recording: object = None
 
     def build(self, count: int, *, first_block: int = 0, tile=None):
         tile_w, tile_h = self.tile if tile is None else tile
         # ``cols = count``: the band is ONE row (the timeline's grid), so tile i
-        # of the window lands on block i of the strip.
+        # of the window lands on block i of the strip. The cache and the
+        # recording are the HOST's, kept across ticks: a scroll tick reuses the
+        # planned tiles of the blocks that stayed visible (StripBandHost does
+        # the same), and a fresh adapter per tick would hide that reuse.
+        if self.recording is None:
+            # ``varied``: every block carries its OWN frame, as a real
+            # recording does. With one shared pair per block the planner's
+            # single-slot image-prep cache would answer for the next tile and
+            # the table would report a strip no recording produces.
+            self.recording = batch.band_recording(
+                self.store, self.image1, self.image2, self.exporter, varied=True
+            )
         return batch.build_band_window(
             self.store,
             int(count),
@@ -159,7 +172,14 @@ class _Rig:
             self.exporter,
             cols=int(count),
             first_block=int(first_block),
+            tile_cache=self.cache,
+            recording=self.recording,
         )
+
+    def clear_cache(self) -> None:
+        """Drop planned tiles: a fill/zoom case measures a cold planning pass."""
+        self.cache.clear()
+        self.recording = None
 
 
 def _timed(fn):
@@ -266,6 +286,7 @@ def _fill_case(rig: _Rig, count: int, *, args) -> CaseResult:
     builds, frames, grabs = [], [], []
     try:
         for _ in range(max(1, int(args.repeat))):
+            rig.clear_cache()
             window, build_ms = _timed(lambda: rig.build(count))
             builds.append(build_ms)
             if surface is not None:
@@ -344,6 +365,7 @@ def _interaction_case(rig: _Rig, count: int, *, kind: str, args) -> CaseResult:
                     lambda: rig.build(count, first_block=step * (2 * index + 2))
                 )
             else:
+                rig.clear_cache()
                 stale, stale_ms = _timed(lambda: rig.build(count))
                 window, build_ms = _timed(
                     lambda: rig.build(count, tile=tile)
@@ -497,6 +519,15 @@ def _parse_tile(text: str) -> tuple[int, int]:
     return width, height
 
 
+def _tile_cache():
+    """The host's plan cache (``StripTileCache``), one per rig."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    return StripTileCache()
+
+
 def _strip_tile() -> tuple[int, int]:
     """The band's own tile geometry (``strip_recording`` owns the number)."""
     from tabs.image_compare.plugins.video_editor.services.strip_recording import (
@@ -647,6 +678,7 @@ def main(argv: list[str] | None = None) -> int:
             image1=Path(image1),
             image2=Path(image2),
             tile=_strip_tile(),
+            cache=_tile_cache(),
         )
         if not args.quiet:
             _print_header(rig, args)
