@@ -74,6 +74,35 @@ def pad_uniform_block(block: bytes, stride: int = UNIFORM_STRIDE) -> bytes:
     return bytes(block) + b"\x00" * (stride - len(block))
 
 
+def scaled_tile_rects(window: StripWindow, width: int, height: int):
+    """Per-tile ``(x, y, w, h)`` in DEVICE px, top-down, edge snapped.
+
+    ``framebuffer_rects`` is this plus the framebuffer's Y rule; a readback grab
+    is top-down, so a harness slicing a grab uses this one (one geometry rule,
+    never a second rounding).
+
+    Snap the EDGES, never the width: rounding ``x * scale`` and ``w * scale``
+    independently makes neighbours overlap at a fractional scale (the live
+    band: a 1280x90 grid into 1020x72 gives cell 1 [0,128), cell 2 starting at
+    128 with width 128, cell 3 at 255 — inside cell 2), so a cell's right edge
+    column was painted by the NEXT tile's content. Edge snapping makes adjacent
+    cells share an edge exactly: no overlap, no gap, and the last cell ends on
+    the target.
+    """
+    fb_w = max(1, int(width))
+    fb_h = max(1, int(height))
+    scale_x = fb_w / float(max(1, int(window.target_w)))
+    scale_y = fb_h / float(max(1, int(window.target_h)))
+    rects = []
+    for (x, y, w, h) in window.rects():
+        left = int(round(x * scale_x))
+        top = int(round(y * scale_y))
+        right = int(round((x + w) * scale_x))
+        bottom = int(round((y + h) * scale_y))
+        rects.append((left, top, max(1, right - left), max(1, bottom - top)))
+    return rects
+
+
 def framebuffer_rects(
     window: StripWindow, target, *, rhi, never_shown: bool = False
 ):
@@ -94,17 +123,10 @@ def framebuffer_rects(
     pixel_size = target.pixelSize()
     fb_w = max(1, int(pixel_size.width()))
     fb_h = max(1, int(pixel_size.height()))
-    scale_x = fb_w / float(max(1, int(window.target_w)))
-    scale_y = fb_h / float(max(1, int(window.target_h)))
-    rects = [
-        (
-            int(round(x * scale_x)),
-            int(round(y * scale_y)),
-            int(round(w * scale_x)),
-            int(round(h * scale_y)),
-        )
-        for (x, y, w, h) in window.rects()
-    ]
+    rects = scaled_tile_rects(window, fb_w, fb_h)
+    if composited_scissor_needs_y_flip(rhi, never_shown=never_shown):
+        rects = [(x, fb_h - (y + h), w, h) for (x, y, w, h) in rects]
+    return rects
     if composited_scissor_needs_y_flip(rhi, never_shown=never_shown):
         rects = [(x, fb_h - (y + h), w, h) for (x, y, w, h) in rects]
     return rects
@@ -602,4 +624,5 @@ __all__ = [
     "pad_uniform_block",
     "release_window_resources",
     "render_strip_window",
+    "scaled_tile_rects",
 ]

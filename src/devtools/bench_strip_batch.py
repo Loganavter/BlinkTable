@@ -45,20 +45,32 @@ the tile, ``strip_band.render_request`` for the request, ``proxy_pair_for``
 over an exporter seam that resolves a pyramid LEVEL exactly as
 ``_resolve_thumbnail_images`` does, ``StripRecordingAdapter`` for the
 recording), renders it into a target of the band's own device-pixel size
-(``--band-target``), slices each cell with the window's rects and prints a
-stage table: target vs grid, per-tile tile/canvas/image/letterbox/content
-rect, the resolved proxy size, and the pixels. A stage that disagrees with the
-filmstrip contract (one band tile IS one filmstrip thumbnail — the 160x90
-target ``is_thumbnail_target_size`` keys the cover plan on) fails the run even
-when the batch itself is byte-exact, so "the pass is right and the plan is
-wrong" cannot pass as green.
+(``--band-target``, ``--band-cols`` for the timeline's one-row grid), slices
+each cell with the window's rects and prints a stage table: target vs grid,
+per-tile tile/canvas/image/letterbox/content rect, the resolved proxy size,
+and the pixels. A stage that disagrees with the filmstrip contract (one band
+tile IS one filmstrip thumbnail — the 160x90 target ``is_thumbnail_target_size``
+keys the cover plan on — and it must FILL its cell) fails the run even when
+the batch itself is byte-exact, so "the pass is right and the plan is wrong"
+cannot pass as green.
 
 The 2026-10-30 phase-2 report ("each cell shows a narrow sliver of the frame
-with black beside it") is that stage: a cell-sized tile (``--tiles 128x72``)
-plans every frame through the fit-inside path, letterboxed inside its cell
-(measured 106 of 128 px of content); at a 250x72 cell the content collapses to
-106 of 250 px. ``strip_tile_size`` is the fix — the tile is the thumbnail the
-QPainter strip rendered, and the pass stretches it over the cell.
+with black beside it") was that stage, twice: a cell-sized tile
+(``--tiles 128x72``) planned every frame through the fit-inside path (measured
+106 of 128 px of content), and then a 160x90 thumbnail whose cover still
+covered the already-fitted content box, so a non-16:9 source kept its bars
+(measured 2026-11-03: a portrait source left 40 of 160 px, i.e. 32 of a 128 px
+cell). ``strip_tile_size`` is the first fix (the tile is the thumbnail the
+QPainter strip rendered); the full-bleed content box in ``prepare_miss`` is
+the second (the thumbnail covers the tile canvas, exactly like the CPU
+compositor's ``_cover_pil(source, tile_size)``).
+
+The live band target is OFF-GRID (a 1280x90 grid drawn into the band's own
+1020x72 device size), so the off-grid row compares every cell with its own
+per-tile reference RESAMPLED to the cell size: a fractional resample is never
+byte-identical, so the verdict is "same content, same footprint" inside the
+printed tolerance (a geometry break is 10-100x it), and the stage table still
+demands a full-bleed tile.
 
 The ``--renderer production`` flag is the phase-1 integration seam: it plans a
 window through the production recording contract (``evaluate_at`` +
@@ -1549,6 +1561,7 @@ def run_band_window(window, target_size=None):
     )
     from tabs.image_compare.services.video_snapshot_rendering.strip_pass import (
         framebuffer_rects,
+        scaled_tile_rects,
     )
 
     _qt_app()
@@ -1581,16 +1594,12 @@ def run_band_window(window, target_size=None):
     pass_rects = framebuffer_rects(
         window, widget.renderTarget(), rhi=widget.rhi(), never_shown=True
     )
+    # Slicing uses the PASS's own rect rule (``scaled_tile_rects``: the same
+    # edge snapping, minus the Y rule) against the grab's size: a grab is
+    # top-down, so the Y-flipped pass rects must not be reused for slicing
+    # (phase 0's row-order lesson) — but the X/width rule is one rule.
+    rects = scaled_tile_rects(window, image.size[0], image.size[1])
     scale = (image.size[0] / float(grid[0]), image.size[1] / float(grid[1]))
-    rects = [
-        (
-            int(round(x * scale[0])),
-            int(round(y * scale[1])),
-            int(round(w * scale[0])),
-            int(round(h * scale[1])),
-        )
-        for (x, y, w, h) in window.rects()
-    ]
     upload_stats = {"capacity": 0, "skipped": 0, "layers": 0}
     try:
         from tabs.image_compare.services.video_snapshot_rendering import strip_pass
@@ -2139,13 +2148,19 @@ def band_divergences(stages: dict) -> list[str]:
     The contract: one band tile IS one filmstrip thumbnail — the request target
     the QPainter strip rendered (``THUMBNAIL_TARGET_SIZE``, the one size that
     selects the plan builder's cover path and the pyramid pick the thumbnail
-    seam uses) — and the pass stretches that tile over one block cell. A tile
-    planned at the cell's own aspect takes the fit-inside path instead, which
-    letterboxes the frame inside the cell: the phase-2 "narrow sliver" report.
+    seam uses) — and the pass stretches that tile over one block cell, whose
+    aspect is the timeline's, not the frame's.
 
-    The letterbox itself is REPORTED, not asserted full: a thumbnail whose
-    source aspect differs from 16:9 legitimately carries bars, and the band
-    must reproduce exactly that thumbnail.
+    So the tile's PLAN must be full-bleed: the content box is the whole canvas
+    and nothing is left empty for the cell to show beside it. A fit-inside tile
+    (the ``is_thumbnail_target_size`` cover branch covering the already-fitted
+    content box instead of the canvas) keeps the frame's letterbox bars, and
+    the pass then stretches those bars over the cell — the "each cell shows a
+    narrow strip of the frame with empty space beside it" report
+    (2026-11-03: a portrait source left 40 of 160 px of content, i.e. 32 of a
+    128 px cell). This gate names that stage by its empty fraction instead of
+    leaving it to the pixel comparison, which cannot see it: the per-tile
+    reference is rendered from the SAME plan and carries the same bars.
     """
     findings: list[str] = []
     thumbnail = stages["thumbnail"]
@@ -2167,7 +2182,28 @@ def band_divergences(stages: dict) -> list[str]:
                 f"tile {tile['index']}: plan canvas {tile['canvas']} != tile "
                 f"{tile['tile']}"
             )
+        filled = _content_fills_tile(tile)
+        if not filled:
+            findings.append(
+                f"tile {tile['index']}: content rect {tile['content_rect']} does "
+                f"not fill the {tile['tile']} tile (letterbox {tile['letterbox']}, "
+                f"plan image {tile['image']}) — the pass stretches the tile over "
+                "a block cell, so every empty part of the tile becomes an empty "
+                "part of the cell"
+            )
     return findings
+
+
+def _content_fills_tile(tile: dict) -> bool:
+    """Whether the tile's plan content covers the whole tile canvas."""
+    tile_w, tile_h = tile["tile"]
+    x, y, w, h = tile["content_rect"]
+    letterbox = tile["letterbox"]
+    return (
+        (int(x), int(y)) == (0, 0)
+        and (int(w), int(h)) == (int(tile_w), int(tile_h))
+        and all(abs(float(v) - target) <= 1e-6 for v, target in zip(letterbox, (0.0, 0.0, 1.0, 1.0)))
+    )
 
 
 def print_band_stages(stages: dict, divergences, quiet: bool = False) -> None:
@@ -2195,17 +2231,96 @@ def print_band_stages(stages: dict, divergences, quiet: bool = False) -> None:
     scale = stages["scale"]
     if abs(scale[0] - 1.0) > 1e-9 or abs(scale[1] - 1.0) > 1e-9:
         # A note, not a verdict: the host's band is its own widget size, and
-        # the strip has always scaled one tile into one block cell.
+        # the strip has always scaled one tile into one block cell. The cells
+        # are still compared (against the reference resampled to the cell).
         print(
             f"  note: target {stages['target']} != grid {stages['grid']} "
             f"(scale {scale[0]:.3f}x{scale[1]:.3f}) — every cell is a uniform "
-            "resample; the exactness column is informational"
+            "resample, compared against the reference resampled to the cell"
         )
     if divergences:
         for finding in divergences:
             print(f"  DIVERGES: {finding}")
     else:
         print("  band stages: all agree with the filmstrip contract")
+
+
+#: Off-grid band target verdict: every cell is compared with its own per-tile
+#: reference RESAMPLED to the cell's device size. A fractional resample is not
+#: byte-identical by construction (the GPU filters the layer with its own
+#: sampler and mips; PIL resamples the reference), so the verdict is "same
+#: content, same footprint" with a measured tolerance. A geometry break — a
+#: tile at the wrong offset/layer, a letterboxed sliver, a mirrored row — is
+#: 10-100x these numbers, which is why they are stated instead of a hash.
+BAND_RESAMPLE_MEAN_MAX = 12.0
+BAND_RESAMPLE_OUTLIER_DELTA = 64
+#: Measured worst cell at the live target: mean 2.4/255 and 1.6% of pixels
+#: beyond 64/255 (the divider line, where the GPU's own filtering of a 3 px bar
+#: and PIL's resample of it agree only approximately). A geometry break — a
+#: tile at the wrong offset or layer, a sliver, a mirrored row — puts 30-100%
+#: of the cell's pixels there, i.e. an order of magnitude past this.
+BAND_RESAMPLE_OUTLIER_FRAC_MAX = 0.03
+
+
+def compare_band_cells(band_result, reference, tile_size):
+    """``(matching, total, worst_mean, worst_outlier_frac, findings)``.
+
+    Slices each cell out of the one band readback and compares it with its own
+    reference tile (rendered by the per-tile route at ``tile_size``) resized to
+    that cell. Off-grid only: an on-grid target is byte-exact and compared as
+    bytes by the caller.
+    """
+    from PIL import Image
+
+    image = band_result["image"]
+    size = image.size
+    raw = image.tobytes("raw", "RGBA")
+    matching = 0
+    worst_mean = 0.0
+    worst_frac = 0.0
+    findings = []
+    rects = band_result["rects"]
+    for index, rect in enumerate(rects):
+        if index >= len(reference):
+            findings.append(f"cell {index}: no reference tile")
+            continue
+        cell = Image.frombytes(
+            "RGBA", (int(rect[2]), int(rect[3])), slice_tile_bytes(raw, size, rect)
+        )
+        ref_raw = reference[index][2]
+        ref = Image.frombytes(
+            "RGBA", (int(tile_size[0]), int(tile_size[1])), ref_raw
+        )
+        expected = ref.resize(cell.size, Image.Resampling.LANCZOS).tobytes(
+            "raw", "RGBA"
+        )
+        actual = cell.tobytes("raw", "RGBA")
+        total_delta = 0
+        outliers = 0
+        for offset in range(0, len(actual), 4):
+            worst_channel = 0
+            for channel in range(4):
+                delta = abs(actual[offset + channel] - expected[offset + channel])
+                total_delta += delta
+                if delta > worst_channel:
+                    worst_channel = delta
+            if worst_channel > BAND_RESAMPLE_OUTLIER_DELTA:
+                outliers += 1
+        pixels = max(1, len(actual) // 4)
+        mean = total_delta / float(max(1, len(actual)))
+        frac = outliers / float(pixels)
+        worst_mean = max(worst_mean, mean)
+        worst_frac = max(worst_frac, frac)
+        if mean <= BAND_RESAMPLE_MEAN_MAX and frac <= BAND_RESAMPLE_OUTLIER_FRAC_MAX:
+            matching += 1
+        else:
+            findings.append(
+                f"cell {index} {cell.size}: mean {mean:.1f}/255, "
+                f"{100.0 * frac:.1f}% of px beyond {BAND_RESAMPLE_OUTLIER_DELTA}/255 "
+                "vs the reference resampled to the cell"
+            )
+    total = len(rects)
+    return matching, total, worst_mean, worst_frac, findings
 
 
 # ---------------------------------------------------------------------------
@@ -2487,9 +2602,23 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "band render-target pixel size WxH (default = the window grid, i.e. "
-            "cols*tile). An off-grid target is a deliberate uniform resample: "
-            "the run reports the scale and marks its exactness column "
-            "informational instead of claiming a byte comparison."
+            "cols*tile). An off-grid target is the live case (a 1280x90 grid "
+            "drawn into the band's own device size, e.g. 1020x72): every cell "
+            "is then compared with its own per-tile reference RESAMPLED to the "
+            "cell, with a stated tolerance (a fractional resample is never "
+            "byte-identical), and the stage table still demands a full-bleed "
+            "tile."
+        ),
+    )
+    parser.add_argument(
+        "--band-cols",
+        default=None,
+        help=(
+            "columns of the band window (default = the square-ish column count "
+            "for N). The timeline's band is ONE row, so the live geometry is "
+            "--band-cols N: e.g. -N 8 --band-cols 8 --band-target 1020x72 is "
+            "an 8 x 160x90 grid (1280x90) drawn into the band's 1020x72 device "
+            "size."
         ),
     )
     parser.add_argument("--tiles", default=None)
@@ -2525,6 +2654,14 @@ def main(argv: list[str] | None = None) -> int:
     if band_target is not None and not args.band:
         print("\n--band-target only applies with --band", file=sys.stderr)
         return 1
+    band_cols = int(args.band_cols) if args.band_cols else None
+    if band_cols is not None:
+        if not args.band:
+            print("\n--band-cols only applies with --band", file=sys.stderr)
+            return 1
+        if band_cols <= 0:
+            print("\n--band-cols must be positive", file=sys.stderr)
+            return 1
     if max(tile_w, tile_h) > LAYER_PX:
         # Production uploads a tile 1:1 into one array layer and refuses an
         # image larger than the layer (ArrayResources._image_rejection), so a
@@ -2550,10 +2687,8 @@ def main(argv: list[str] | None = None) -> int:
 
         rows = []
         # Band-mode verdicts: per-N stage findings (a diverging stage is a
-        # failure even when the batch itself is byte-exact) and the rows whose
-        # off-grid target makes the exactness column informational.
+        # failure even when the batch itself is byte-exact).
         band_stage_findings: dict[int, list[str]] = {}
-        informational_rows: set[int] = set()
 
         # The production renderer plans through the app's own recording seam,
         # so it needs the store the plan builder reads (same store shape
@@ -2591,7 +2726,7 @@ def main(argv: list[str] | None = None) -> int:
                     image1_path,
                     image2_path,
                     exporter,
-                    cols=_cols_for(count),
+                    cols=band_cols if band_cols is not None else _cols_for(count),
                 )
                 tiles = list(window.tiles)
                 plan_ms = window.build_ms
@@ -2649,7 +2784,7 @@ def main(argv: list[str] | None = None) -> int:
                             f"{[(t.index, t.layer1, t.layer2) for t in tiles[:4]]}"
                             f"{'...' if len(tiles) > 4 else ''}"
                         )
-                rows.append((count, plan_ms, pack_ms, None, None, None))
+                rows.append((count, plan_ms, pack_ms, None, None, None, ""))
                 if seam in ("production", "band"):
                     _release_production_window(window)
                     window = None
@@ -2666,6 +2801,7 @@ def main(argv: list[str] | None = None) -> int:
                 tiles, args.reference_samples or None
             )
             band_result = None
+            band_cells = None
             if seam == "band":
                 band_result = run_band_window(window, band_target)
                 scale = band_result["scale"]
@@ -2682,11 +2818,12 @@ def main(argv: list[str] | None = None) -> int:
                     ]
                     batch_hashes = [hash_rgba(blob) for blob in batch_bytes]
                 else:
-                    print(
-                        f"  informational: band target {band_result['image'].size} "
-                        f"for a {window.target_w}x{window.target_h} grid "
-                        f"(scale {scale[0]:.3f}x{scale[1]:.3f}) — every cell is a "
-                        "uniform resample, so no byte comparison is claimed"
+                    # The live case: the grid is drawn into the band's own
+                    # device size. Compare every cell with its own reference
+                    # RESAMPLED to the cell (a fractional resample cannot be
+                    # byte-identical) and keep the numbers.
+                    band_cells = compare_band_cells(
+                        band_result, reference, (tile_w, tile_h)
                     )
                 timings = {
                     "pass_ms": band_result["pass_ms"],
@@ -2696,7 +2833,9 @@ def main(argv: list[str] | None = None) -> int:
                         (int(tile.index), int(tile.layer1), int(tile.layer2))
                         for tile in window.tiles
                     ],
-                    "divider_tiles": None,
+                    "divider_tiles": [
+                        int(tile.index) for tile in window.tiles if tile.divider
+                    ],
                 }
             elif seam == "production":
                 batch_hashes, batch_bytes, timings = run_production_window(window)
@@ -2704,26 +2843,49 @@ def main(argv: list[str] | None = None) -> int:
                 batch_hashes, batch_bytes, timings = run_batch_pass(
                     tiles, cols=_cols_for(count), tile_service=tile_service
                 )
-            matches = sum(
-                1
-                for index, (ref_hash, _dbg, _raw) in enumerate(reference)
-                if index < len(batch_hashes) and batch_hashes[index] == ref_hash
-            )
-            informational = seam == "band" and not batch_hashes
+            resampled_note = ""
+            if band_cells is not None:
+                matches, total, worst_mean, worst_frac, cell_findings = band_cells
+                resampled_note = " (resampled)"
+                print(
+                    f"  off-grid band target {band_result['image'].size} for a "
+                    f"{window.target_w}x{window.target_h} grid (scale "
+                    f"{scale[0]:.3f}x{scale[1]:.3f}): every cell compared with "
+                    "its own tile resampled to the cell"
+                )
+                print(
+                    f"  worst cell: mean {worst_mean:.2f}/255, "
+                    f"{100.0 * worst_frac:.2f}% of px beyond "
+                    f"{BAND_RESAMPLE_OUTLIER_DELTA}/255 (tolerance mean <= "
+                    f"{BAND_RESAMPLE_MEAN_MAX:.0f}, outliers <= "
+                    f"{100.0 * BAND_RESAMPLE_OUTLIER_FRAC_MAX:.0f}%)"
+                )
+                for finding in cell_findings[:4]:
+                    print(f"  MISMATCH {finding}")
+            else:
+                matches = sum(
+                    1
+                    for index, (ref_hash, _dbg, _raw) in enumerate(reference)
+                    if index < len(batch_hashes) and batch_hashes[index] == ref_hash
+                )
+                total = len(reference)
+            still_offgrid = band_cells is not None
             if not args.quiet:
                 print(
                     f"  reference {len(reference)} tiles in {reference_ms:.1f} ms; "
                     f"pass in {timings['pass_ms']:.2f} ms; "
                     f"readback in {timings['readback_ms']:.2f} ms"
                 )
-            first_bad = next(
-                (
-                    index
-                    for index, (ref_hash, _dbg, _raw) in enumerate(reference)
-                    if index >= len(batch_hashes) or batch_hashes[index] != ref_hash
-                ),
-                None,
-            )
+            first_bad = None
+            if not still_offgrid:
+                first_bad = next(
+                    (
+                        index
+                        for index, (ref_hash, _dbg, _raw) in enumerate(reference)
+                        if index >= len(batch_hashes) or batch_hashes[index] != ref_hash
+                    ),
+                    None,
+                )
             total_px = tile_w * tile_h
             blank = [
                 index
@@ -2790,8 +2952,6 @@ def main(argv: list[str] | None = None) -> int:
                     )
             if seam == "band":
                 band_stage_findings[count] = list(divergences)
-                if informational:
-                    informational_rows.add(count)
             rows.append(
                 (
                     count,
@@ -2799,7 +2959,8 @@ def main(argv: list[str] | None = None) -> int:
                     timings["pass_ms"],
                     timings["readback_ms"],
                     matches,
-                    len(reference),
+                    total,
+                    resampled_note,
                 )
             )
             if seam in ("production", "band"):
@@ -2810,7 +2971,7 @@ def main(argv: list[str] | None = None) -> int:
         print()
         if args.cpu_only:
             print("N | plan_ms | pack_ms")
-            for count, plan_ms, pack_ms, _p, _r, _m in rows:
+            for count, plan_ms, pack_ms, _p, _r, _m, _n in rows:
                 print(f"{count:>3} | {plan_ms:>7.1f} | {pack_ms:>7.2f}")
             return 0
 
@@ -2822,23 +2983,24 @@ def main(argv: list[str] | None = None) -> int:
                 "exact column is informational (the reference re-resolves the "
                 "plan's own per-frame proxy)."
             )
-        for count, plan_ms, pass_ms, readback_ms, matches, total in rows:
-            exact = (
-                "informational (off-grid band target)"
-                if count in informational_rows
-                else f"{matches}/{total}"
-            )
+        for count, plan_ms, pass_ms, readback_ms, matches, total, note in rows:
+            exact = f"{matches}/{total}{note}"
             print(
                 f"{count:>3} | {plan_ms:>7.1f} | {pass_ms:>7.2f} | "
                 f"{readback_ms:>11.2f} | {exact}"
             )
-            if count in informational_rows:
-                continue
             if matches != total:
                 ok = False
             if count == 17 and pass_ms > BUDGET_MS_17:
                 print(f"  over budget: N=17 pass took {pass_ms:.2f} ms (budget {BUDGET_MS_17:.0f} ms)")
                 ok = False
+        if rows and any(note for *_rest, note in rows):
+            print(
+                "note: a row marked (resampled) is an OFF-GRID band target: each "
+                "cell was compared with its own reference resampled to the cell "
+                "(a fractional resample is never byte-identical), with the "
+                "tolerance printed above each row's table line."
+            )
         if band_stage_findings:
             failing = {
                 count: findings
