@@ -189,6 +189,7 @@ _KNOWN_SUSPICIOUS_DEFS = frozenset(
         # Strip-window packing vocabulary (see the call set): strip tiles are
         # per-block render packing, not a second export tile/LOD planner.
         "StripTile",
+        "StripTileCache",
         "_ensure_tile_buffers",
         "_placeholder_tile",
         "_stage_tile_uniforms",

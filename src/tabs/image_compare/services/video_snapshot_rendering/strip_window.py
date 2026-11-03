@@ -12,7 +12,10 @@ This module is that pass as production API:
   through ``recording.evaluate_at(t)``, builds the per-tile plan through the
   same plan builder the export/thumbnail path uses, allocates the texture-array
   layers through ``TileTextureService`` and packs the per-tile uniform block +
-  instance. Importable and testable offscreen (no QRhi).
+  instance. Importable and testable offscreen (no QRhi). A caller that passes a
+  :class:`StripTileCache` reuses the plan/pixels of blocks that stayed visible
+  (one plan builder per recording, not per window) — that is what keeps a
+  scroll tick inside the interaction budget.
 * :func:`render_window` — one ``beginPass``/``endPass`` over the window; the
   GPU half lives in ``strip_pass`` and is imported lazily so this module stays
   RHI-free at import time.
@@ -33,6 +36,7 @@ Geometry is single-source: block timing and the tile size come from the
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from PIL import Image
@@ -193,6 +197,9 @@ class StripWindow:
     cancelled: bool = False
     cancel_reason: str = ""
     applied: bool = False
+    #: Planned tiles reused from :class:`StripTileCache` / planned this build.
+    cache_hits: int = 0
+    cache_misses: int = 0
 
     @property
     def last_block(self) -> int:
@@ -227,6 +234,7 @@ class StripWindow:
             "target": (self.target_w, self.target_h),
             "placeholders": self.placeholder_reasons,
             "cancelled": self.cancelled,
+            "cache": {"hits": int(self.cache_hits), "misses": int(self.cache_misses)},
         }
 
 
@@ -296,6 +304,123 @@ def _default_plan_builder():
     return renderer.prepare_canvas_frame_from_images
 
 
+class StripTileCache:
+    """Planned strip tiles kept across windows (LRU, one recording scope).
+
+    A scroll tick moves the visible range by a block or two, so all but the
+    newly exposed blocks are the same frames planned for the same tile size:
+    planning them again is the interaction budget's whole cost (a window build
+    is 16-25 ms of CPU, and 14 spill-mmap flushes were 24 ms of it before
+    2026-11-04). Reusing the planned tile — plan, PIL pixels, canvas size —
+    turns that tick into one plan plus one render.
+
+    Scope and invalidation: the cache belongs to ONE recording (the caller
+    clears it when the recording is cut/undone) and keys a tile by
+    ``(block, tile_w, tile_h, request token)``, so a zoom (new tile size) is a
+    miss by construction and a re-zoom to a seen size is a hit. Placeholder
+    tiles are never cached: a missing proxy or a failed plan is transient, and
+    caching it would pin a blank cell over a frame that arrives later.
+
+    Bounded: ``capacity`` planned tiles (default 96 = 48 blocks at two sides,
+    ~5 MB of 160x90 pixels), LRU beyond it. The memory is the plan's stores,
+    so the cap matters.
+    """
+
+    def __init__(self, capacity: int = 96, plan_builder=None) -> None:
+        self._capacity = max(1, int(capacity))
+        self._token: object = None
+        self._entries: OrderedDict = OrderedDict()
+        #: The plan builder this scope plans with. It MUST outlive a window:
+        #: ``SnapshotFrameRenderer`` owns ``FrameRenderCaches``, and a fresh
+        #: renderer per window pays the cold proxy/prescale/plan-cache cost on
+        #: its first tile — measured 2026-11-04 at ~13 ms of a tick that planned
+        #: a single new block. One builder per recording is what the export path
+        #: already does.
+        self._plan_builder = plan_builder
+        #: Diagnostics for the window's ``to_dict`` and the latency bench.
+        self.hits = 0
+        self.misses = 0
+
+    def planner(self):
+        """The plan builder for this scope (created on first use)."""
+        if self._plan_builder is None:
+            self._plan_builder = _default_plan_builder()
+        return self._plan_builder
+
+    def clear(self) -> None:
+        self._entries.clear()
+        self._token = None
+
+    def _scope(self, token) -> None:
+        if token != self._token:
+            self._entries.clear()
+            self._token = token
+
+    def get(self, token, key):
+        self._scope(token)
+        entry = self._entries.get(key)
+        if entry is None:
+            self.misses += 1
+            return None
+        self._entries.move_to_end(key)
+        self.hits += 1
+        return entry
+
+    def put(self, token, key, tile: "StripTile") -> None:
+        self._scope(token)
+        self._entries[key] = tile
+        self._entries.move_to_end(key)
+        while len(self._entries) > self._capacity:
+            self._entries.popitem(last=False)
+
+
+def _recording_token(recording):
+    """Identity of the recording a plan belongs to (the cache's scope)."""
+    token = getattr(recording, "cache_key", None)
+    return id(recording) if token is None else token
+
+
+def _request_token(request):
+    """The request fields a plan's geometry depends on (cache key half)."""
+    surface = getattr(request, "target_surface", None)
+    bounds = getattr(request, "global_bounds", None)
+    bounds_token = None
+    if bounds is not None:
+        bounds_token = (
+            int(getattr(bounds, "pad_left", 0)),
+            int(getattr(bounds, "pad_right", 0)),
+            int(getattr(bounds, "pad_top", 0)),
+            int(getattr(bounds, "pad_bottom", 0)),
+            int(getattr(bounds, "base_width", 0)),
+            int(getattr(bounds, "base_height", 0)),
+        )
+    return (
+        int(getattr(surface, "width", 0) or 0),
+        int(getattr(surface, "height", 0) or 0),
+        tuple(getattr(surface, "fill_rgba", (0, 0, 0, 0)) or (0, 0, 0, 0)),
+        bool(getattr(request, "auto_crop", False)),
+        bool(getattr(request, "fit_content", False)),
+        bounds_token,
+    )
+
+
+def _reposition(cached: StripTile, index: int, block: int, timestamp: float, rect) -> StripTile:
+    """``cached``'s plan and pixels at a new window position."""
+    return StripTile(
+        index=int(index),
+        block=int(block),
+        timestamp=float(timestamp),
+        rect=rect,
+        plan=cached.plan,
+        image1=cached.image1,
+        image2=cached.image2,
+        canvas_w=cached.canvas_w,
+        canvas_h=cached.canvas_h,
+        tile_w=cached.tile_w,
+        tile_h=cached.tile_h,
+    )
+
+
 def _pil_image(source):
     """Plan image -> PIL, whether it is a PIL image or a ``TiledPixelStore``."""
     if source is None:
@@ -363,6 +488,7 @@ def build_window(
     tile_service=None,
     generation: int | None = None,
     layer_px: int = LAYER_PX,
+    tile_cache: "StripTileCache | None" = None,
 ) -> StripWindow:
     """Plan + pack ``count`` visible blocks starting at ``first_block``.
 
@@ -411,12 +537,30 @@ def build_window(
         target_h=target_h,
         layer_px=int(layer_px),
     )
-    planner = plan_builder if plan_builder is not None else _default_plan_builder()
+    planner = (
+        plan_builder
+        if plan_builder is not None
+        else (tile_cache.planner() if tile_cache is not None else _default_plan_builder())
+    )
+    cache_token = _recording_token(recording) if tile_cache is not None else None
+    request_key = _request_token(request) if tile_cache is not None else None
     tiles: list[StripTile] = []
     for index in range(count):
         block = first_block + index
         timestamp = float(resolved.block_time(block))
         rect = tile_rect(index, cols, tile_w, tile_h)
+        cache_key = (
+            (int(block), int(tile_w), int(tile_h), request_key)
+            if tile_cache is not None
+            else None
+        )
+        if tile_cache is not None:
+            cached = tile_cache.get(cache_token, cache_key)
+            if cached is not None:
+                window.cache_hits += 1
+                tiles.append(_reposition(cached, index, block, timestamp, rect))
+                continue
+        window.cache_misses += 1
         snapshot, reason = None, ""
         try:
             snapshot = recording.evaluate_at(timestamp)
@@ -473,21 +617,24 @@ def build_window(
                 )
             )
             continue
-        tiles.append(
-            StripTile(
-                index=index,
-                block=block,
-                timestamp=timestamp,
-                rect=rect,
-                plan=plan,
-                image1=plan_image1,
-                image2=plan_image2,
-                canvas_w=int(getattr(plan, "canvas_w", 0) or tile_w),
-                canvas_h=int(getattr(plan, "canvas_h", 0) or tile_h),
-                tile_w=tile_w,
-                tile_h=tile_h,
-            )
+        tile = StripTile(
+            index=index,
+            block=block,
+            timestamp=timestamp,
+            rect=rect,
+            plan=plan,
+            image1=plan_image1,
+            image2=plan_image2,
+            canvas_w=int(getattr(plan, "canvas_w", 0) or tile_w),
+            canvas_h=int(getattr(plan, "canvas_h", 0) or tile_h),
+            tile_w=tile_w,
+            tile_h=tile_h,
         )
+        tiles.append(tile)
+        if tile_cache is not None:
+            # Only a real frame is cacheable: a placeholder means "the proxy or
+            # the plan was not ready", which the next tick may resolve.
+            tile_cache.put(cache_token, cache_key, tile)
 
     service = _assign_layers(tiles, window, tile_service)
     window.tiles = tuple(tiles)

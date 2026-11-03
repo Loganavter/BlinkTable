@@ -203,6 +203,16 @@ class StripRecordingAdapter:
         self.fps = float(fps or fallback_fps or 10.0)
         self.block_count = int(getattr(layout, "block_count", 0) or 0)
 
+    @property
+    def cache_key(self):
+        """Stable identity of the underlying recording (strip plan cache).
+
+        The adapter itself is rebuilt on every view change, so a plan cache
+        scoped by the adapter would never hit; the recording it wraps is the
+        content, and the host clears its cache when that content changes.
+        """
+        return (id(self._recording), float(self.fps))
+
     def evaluate_at(self, timestamp):
         """The frame state at ``timestamp`` — the recording's own evaluation."""
         return self._recording.evaluate_at(float(timestamp))
