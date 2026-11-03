@@ -95,6 +95,16 @@
       }
     },
     {
+      "path": "src/devtools/bench_strip_latency.py",
+      "limit": 500,
+      "marker": "Audit-Meta:",
+      "raw": "pattern=devtool-pipeline reason=\"one latency gate: the band's own build seam, the per-case warm-up/median measurement, the latest-wins proof and the budget table are one measurement — splitting the rig from the table would let them disagree about what was timed\"",
+      "parsed": {
+        "pattern": "devtool-pipeline",
+        "reason": "one latency gate: the band's own build seam, the per-case warm-up/median measurement, the latest-wins proof and the budget table are one measurement — splitting the rig from the table would let them disagree about what was timed"
+      }
+    },
+    {
       "path": "src/devtools/capture_surface.py",
       "limit": 500,
       "marker": "Audit-Meta:",
