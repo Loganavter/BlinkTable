@@ -87,7 +87,7 @@ def _build_default_magnifier_model(
         internal_split=0.5,
         divider_visible=state.default_divider_visible,
         divider_thickness=state.default_divider_thickness,
-        border_thickness=2,
+        border_thickness=int(getattr(state, "default_border_thickness", 2)),
         visible_left=True,
         visible_center=True,
         visible_right=True,

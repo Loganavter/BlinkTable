@@ -30,19 +30,20 @@ so the tiles that stayed visible keep the array layers their pixels are already
 in and only the newly exposed block is uploaded.
 
 Level identity: :func:`level_for_layout` takes the tile size from the
-timeline's own layout (``timeline_strip_layout`` → ``strip_block_layout``) and
-the band target's device pixel ratio, never a second tile formula. The level the
-user is about to zoom into is cache-filled ahead by
+timeline's own layout (``timeline_strip_layout`` → ``strip_block_layout``), which
+is the block cell in device pixels (``strip_tile_size``: the cell times the
+target's device pixel ratio, one array layer at most). The level the user is
+about to enter is cache-filled ahead by
 :meth:`StripBandHost.prepare_adjacent_level`, which is explicitly NOT on the
 frame path (see its docstring).
 
 Geometry single source: :func:`timeline_strip_layout` asks the timeline's own
-``strip_block_layout`` for the visible blocks (its representative frames and
-the block width that locates the first one), and takes the tile from
-:func:`strip_recording.strip_tile_size` — one filmstrip thumbnail, never the
-block cell's aspect. So this module holds no block formula and no tile formula
-of its own. The per-frame QPainter thumbnail pipeline was deleted in phase 3;
-this is the only strip renderer left.
+``strip_block_layout`` for the visible blocks (its representative frames and the
+block width, which IS the cell's width) and for the strip row height, and takes
+the tile from :func:`strip_recording.strip_tile_size` — one block cell, never a
+second formula. So this module holds no block formula and no tile formula of its
+own. The per-frame QPainter thumbnail pipeline was deleted in phase 3; this is
+the only strip renderer left.
 """
 
 from __future__ import annotations
@@ -291,7 +292,7 @@ class StripBandHost:
         except Exception:
             logger.debug("strip window skipped: no fps", exc_info=True)
             return None
-        current = timeline_strip_layout(timeline, fps=fps)
+        current = timeline_strip_layout(timeline, fps=fps, dpr=self._dpr())
         if current is None:
             return self._window
         layout, first_block, count = current
@@ -302,9 +303,12 @@ class StripBandHost:
             return self._window
         if recording is None:
             return self._window
-        # The level is the layout's tile size at the band target's DPR — one
-        # function, no second tile formula in this host.
-        level = level_for_layout(layout, self._dpr())
+        # The level is the layout's tile size at a ratio of 1.0: the layout's
+        # tile IS the device-pixel cell (``strip_tile_size`` already scaled the
+        # block cell by the target DPR), so passing the DPR again would claim
+        # device pixels the plan never has. One function, no second tile
+        # formula in this host.
+        level = level_for_layout(layout)
         tile_w, tile_h = level.tile_size
         key = (id(recording), int(first_block), int(count), level)
         if key == self._key and self._window is not None:
@@ -346,9 +350,11 @@ class StripBandHost:
         self._record_level(window, reason)
         level = getattr(window, "level", None)
         if prepare_level and level is not None and level != self._prepared_level:
-            # A level was just planned for the first time: cache-fill the one the
-            # user would zoom into. Bounded, and only here (a fill tick) — a
-            # scroll tick keeps the same level and never reaches this.
+            # A level was just planned for the first time: cache-fill the one
+            # the user would enter next (the next DPR's cell today; a zoom rung
+            # once the toolkit layout exposes a zoom-scaled cell). Bounded, and
+            # only here (a fill tick) — a scroll tick keeps the same level and
+            # never reaches this.
             self._prepared_level = level
             try:
                 self.prepare_adjacent_level()
@@ -437,7 +443,7 @@ class StripBandHost:
     # -- the adjacent level: a cache fill, never a frame --------------------
 
     def prepare_adjacent_level(self, *, budget_ms=None):
-        """Cache-fill the level the next zoom steps into. **Not the frame path.**
+        """Cache-fill the level the next step enters. **Not the frame path.**
 
         Contract (what makes the level-change tick a swap instead of a re-plan):
 
@@ -455,6 +461,12 @@ class StripBandHost:
           that :meth:`_abandon_preparation` bumps (a recording change, a dropped
           window, a detach), so a fill stops at the next tile instead of
           finishing work nobody can use.
+
+        "The next step" is whatever the ladder says is one rung up from the live
+        level (:func:`next_level`): with the tile being the block cell in device
+        pixels, that is the next screen's cell (a 1x 128x72 strip prepares
+        256x144, which is exactly the 2x cell, so the window arriving on the 2x
+        screen enters the prepared level warm).
 
         Returns the :class:`LevelPreparation` report, or ``None`` when there is
         nothing to prepare (no window yet, or the layout is already at the layer
@@ -634,11 +646,19 @@ class StripBandHost:
             return None
 
     def _dpr(self) -> float:
-        """The band target's device pixel ratio (the level's second axis).
+        """The band target's device pixel ratio — the strip tile's other axis.
 
         Read from the band — the surface the tiles are drawn into — and fall
         back to the timeline widget, then to 1.0. Never a ``QScreen`` lookup:
         the DPR that matters is the one the target actually renders at.
+
+        It reaches the tile through :func:`timeline_strip_layout`
+        (``strip_tile_size(block_size, dpr)``): the tile is the block cell in
+        DEVICE pixels, so this is what makes the same strip plan 128x72 on a 1x
+        screen and 256x144 on a 2x one — and therefore what moves the level on a
+        real user gesture (the window arriving on a screen with another ratio).
+        Zoom does not move it: the timeline's cells are constant width at every
+        reachable zoom (measured 2026-11-04, see ``strip_tile_size``).
         """
         for owner in (self._band, self._timeline()):
             getter = getattr(owner, "devicePixelRatioF", None)

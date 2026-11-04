@@ -63,6 +63,14 @@ def _apply_simple_texts(dialog, lang: str) -> None:
             "magnifier_auto_color_checkbox",
             "settings.magnifier_auto_color_new_instances",
         ),
+        (
+            "spin_magnifier_border_thickness",
+            "settings.magnifier_border_thickness",
+        ),
+        (
+            "spin_magnifier_capture_thickness",
+            "settings.magnifier_capture_thickness",
+        ),
         ("crop_checkbox", "settings.autocrop_black_borders_on_load"),
         ("auto_psnr_checkbox", "settings.autocalculate_psnr"),
         ("auto_ssim_checkbox", "settings.autocalculate_ssim"),

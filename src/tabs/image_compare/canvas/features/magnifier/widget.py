@@ -356,6 +356,12 @@ MAGNIFIER_COMMAND_ALIASES = (
         "overlay.settings.apply_behavior", "settings.apply_behavior"
     ),
     CanvasFeatureCommandAlias(
+        "overlay.settings.set_stroke", "settings.set_stroke"
+    ),
+    CanvasFeatureCommandAlias(
+        "overlay.settings.get_stroke", "settings.get_stroke"
+    ),
+    CanvasFeatureCommandAlias(
         "overlay.settings.toggle_divider_visibility",
         "settings.toggle_divider_visibility",
     ),

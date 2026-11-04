@@ -61,6 +61,27 @@ def register_settings(tab, registry) -> None:
     contrib = build_settings_contribution(tab)
     for section in contrib.sections:
         registry.add(section)
+    try:
+        from plugins.settings.registry import get_settings_registry
+        from tabs.image_compare.ui.settings_performance import (
+            STROKE_SECTION,
+            read_magnifier_stroke_payload,
+            seed_magnifier_stroke_payload,
+        )
+
+        get_settings_registry().register_payload_reader(
+            STROKE_SECTION, read_magnifier_stroke_payload
+        )
+        get_settings_registry().register_payload_seeder(
+            STROKE_SECTION, seed_magnifier_stroke_payload
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger("app").exception(
+            "image_compare: stroke payload registration failed"
+        )
+
     for extra in contrib.extras:
         registry.add_section_extra(
             extra.section_id,

@@ -28,6 +28,8 @@ INTERACTIVE = group(
     "settings.optimize_laser_smoothing",
     "settings.magnifier_intersection_highlight",
     "settings.magnifier_auto_color_new_instances",
+    "settings.magnifier_border_thickness",
+    "settings.magnifier_capture_thickness",
 )
 VIDEO = group("image_compare.settings.video_recording", "image_compare.settings.recording_fps")
 SEARCH = SearchIndex.of(INTERACTIVE, VIDEO)
@@ -128,8 +130,103 @@ def _build_interactive_optimization_group(dialog, layout, p):
     dialog.interactive_opt_group.add_widget(auto_color_row)
     rows.append(auto_color_row)
 
+    rows += _build_magnifier_stroke_rows(dialog, p)
     _populate_interpolation_combos(dialog, p)
     layout.addWidget(dialog.interactive_opt_group)
+    return rows
+
+
+#: Section the tab's perf extras live on (see use_cases/registration.py). The
+#: host dialog carries tab values through ``tab_extras`` — the sandbox contract
+#: forbids the host layer from naming a tab concept, so these two live here.
+STROKE_SECTION = "image_compare.analysis"
+
+
+def read_magnifier_stroke_payload(dialog) -> dict:
+    """Collect the two stroke rows for ``tab_extras`` (dialog -> data)."""
+    values: dict = {}
+    for attr, key in (
+        ("spin_magnifier_border_thickness", "magnifier_border_thickness"),
+        ("spin_magnifier_capture_thickness", "magnifier_capture_thickness"),
+    ):
+        widget = getattr(dialog, attr, None)
+        if widget is None:
+            continue
+        try:
+            values[key] = int(widget.value())
+        except Exception:
+            continue
+    return values
+
+
+def seed_magnifier_stroke_payload(source) -> dict:
+    """Seed the two rows from the live feature state (store -> dialog).
+
+    Through the capability alias, never a canvas-feature import: the settings
+    UI is shared code (``test_canvas_features_imports``).
+    """
+    try:
+        from ui.canvas_infra.scene.registry import get_canvas_registry
+
+        command = get_canvas_registry("image_compare").get_feature_command_by_alias(
+            "overlay.settings.get_stroke"
+        )
+        if command is None:
+            return {}
+        values = command(source) or {}
+        return {
+            "magnifier_border_thickness": int(
+                values.get("border_thickness", 2)
+            ),
+            "magnifier_capture_thickness": int(
+                values.get("capture_thickness", 2)
+            ),
+        }
+    except Exception:
+        return {}
+
+
+def _build_magnifier_stroke_rows(dialog, p):
+    """Loupe outline + detection-area thickness (owner request 2026-11-04).
+
+    Two spin rows, because they are two different strokes: the loupe's own
+    border is a per-instance model field, the detection ring is the loupe's
+    sampling area drawn by the capture pass. Both are view pixels, so the
+    range is the useful band of a 1x-4x canvas, not a style token.
+    """
+    rows = []
+    seeded = seed_magnifier_stroke_payload(getattr(p, "store", None)) or {}
+    for attr, key, label_key, value in (
+        (
+            "spin_magnifier_border_thickness",
+            "settings.magnifier_border_thickness",
+            "settings.magnifier_border_thickness",
+            int(seeded.get("magnifier_border_thickness", 2)),
+        ),
+        (
+            "spin_magnifier_capture_thickness",
+            "settings.magnifier_capture_thickness",
+            "settings.magnifier_capture_thickness",
+            int(seeded.get("magnifier_capture_thickness", 2)),
+        ),
+    ):
+        label = settings_body_label(INTERACTIVE.text(dialog, label_key))
+        spin = SpinBox(default_value=2)
+        apply_settings_body(spin)
+        spin.setRange(0, 12)
+        spin.setValue(max(0, min(12, value)))
+        spin.setFixedWidth(scaled_px(100))
+        spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        setattr(dialog, attr, spin)
+        INTERACTIVE.tag_member(spin, key)
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(label)
+        row_layout.addWidget(spin)
+        row_layout.addStretch()
+        row = as_nav_row(row_layout)
+        dialog.interactive_opt_group.add_widget(row)
+        rows.append(row)
     return rows
 
 

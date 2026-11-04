@@ -79,7 +79,7 @@ ALLOWLIST: frozenset[tuple[str, int, str]] = frozenset(
         ("src/tabs/image_compare/canvas/features/guides/properties.py", 19, "view_state"),
         ("src/tabs/image_compare/canvas/features/guides/state/feature_state.py", 33, "view_state"),
         ("src/tabs/image_compare/canvas/features/magnifier/persistence.py", 216, "view_state"),
-        ("src/tabs/image_compare/canvas/features/magnifier/state/feature_state.py", 61, "view_state"),
+        ("src/tabs/image_compare/canvas/features/magnifier/state/feature_state.py", 75, "view_state"),
         ("src/tabs/image_compare/canvas/features/magnifier/state/store.py", 130, "view_state"),
         # -- filename_overlay snapshot render_config writes --
         ("src/tabs/image_compare/canvas/features/filename_overlay/properties.py", 36, "snap.viewport_state.render_config"),

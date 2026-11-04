@@ -15,6 +15,14 @@ class MagnifierWidgetState:
     default_capture_size_relative: float = 0.1
     default_divider_visible: bool = True
     default_divider_thickness: int = 2
+    #: Loupe outline thickness in view px (the per-instance model field wins;
+    #: this is the value a new instance is created with and what the settings
+    #: row writes to every live instance).
+    default_border_thickness: int = 2
+    #: Detection-area (capture ring) thickness in view px. ``None`` keeps the
+    #: canvas style's own ring width, so an untouched install draws exactly what
+    #: it drew before this setting existed.
+    default_capture_thickness: int | None = None
     default_divider_color: Color = field(
         default_factory=lambda: Color(255, 255, 255, 230)
     )
@@ -33,6 +41,12 @@ class MagnifierWidgetState:
             default_capture_size_relative=float(self.default_capture_size_relative),
             default_divider_visible=bool(self.default_divider_visible),
             default_divider_thickness=int(self.default_divider_thickness),
+            default_border_thickness=int(self.default_border_thickness),
+            default_capture_thickness=(
+                None
+                if self.default_capture_thickness is None
+                else int(self.default_capture_thickness)
+            ),
             default_divider_color=self.default_divider_color,
             default_border_color=self.default_border_color,
             intersection_highlight_enabled=bool(self.intersection_highlight_enabled),
