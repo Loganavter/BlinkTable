@@ -34,6 +34,11 @@ def setup_dialog_shell(dialog):
     dialog.shell = SidebarDialogShell(
         sidebar_header=dialog.search_header_host,
         resizable_sidebar=True,
+        # The footer rule runs from the section divider to the window edge and
+        # takes the divider's own colour (owner request 2026-11-04), so the
+        # shell owns the row: the content column goes flush and the pages keep
+        # the padding on their own host.
+        footer_separator=True,
         content_margins=(
             control_edge_padding(),
             control_edge_padding(),
@@ -71,22 +76,14 @@ def setup_dialog_shell(dialog):
     dialog.ok_button.set_defer_click(DEFER_CLICK_AWAIT_RIPPLE)
     dialog.ok_button.clicked.connect(dialog.confirm_settings)
     dialog.cancel_button.clicked.connect(dialog.reject)
-    # A hairline separates the footer from the page content (owner request
-    # 2026-11-04). It lives HERE, not inside DialogActionBar: the export dialog's
-    # bar pins its own height through ``lock_content_minimum_height`` and a
-    # second row inside that widget changes what it settles to
-    # (tests/plugins/test_export_dialog_path_section_height.py caught exactly
-    # that when the separator was first put in the bar).
-    dialog.action_bar_separator = QFrame(dialog)
-    dialog.action_bar_separator.setObjectName("SettingsActionBarSeparator")
-    dialog.action_bar_separator.setFrameShape(QFrame.Shape.HLine)
-    dialog.action_bar_separator.setFrameShadow(QFrame.Shadow.Plain)
-    dialog.action_bar_separator.setFixedHeight(max(1, scaled_px(1)))
-    dialog.action_bar_separator.setSizePolicy(
-        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-    )
-    dialog.content_layout.addWidget(dialog.action_bar_separator)
-    dialog.content_layout.addWidget(dialog.action_bar)
+    # The footer rule is the SHELL's (footer_separator=True): it is painted in
+    # the section divider's colour and spans the content column edge to edge.
+    # It does NOT live inside DialogActionBar — that bar pins its own height
+    # through ``lock_content_minimum_height`` and a second row inside it changes
+    # what it settles to (tests/plugins/test_export_dialog_path_section_height.py
+    # caught that on the first attempt).
+    dialog.action_bar_separator = dialog.shell.footer_separator
+    dialog.shell.footer_layout.addWidget(dialog.action_bar)
 
 def setup_sidebar_items(dialog):
     sections = getattr(dialog, "_active_sections", None)

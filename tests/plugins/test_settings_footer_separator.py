@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QFrame, QVBoxLayout
+from PySide6.QtWidgets import QFrame
 
 
 def _button_text(button) -> str:
@@ -34,13 +34,15 @@ def test_the_footer_is_separated_from_the_page(qapp):
     try:
         separator = getattr(dialog, "action_bar_separator", None)
         assert separator is not None, "the settings footer has no separator"
-        assert separator.frameShape() == QFrame.Shape.HLine
-        assert separator.objectName() == "SettingsActionBarSeparator"
-        layout = dialog.content_layout
-        assert isinstance(layout, QVBoxLayout)
-        assert layout.indexOf(separator) + 1 == layout.indexOf(dialog.action_bar), (
-            "the separator must sit directly above the action bar"
-        )
+        assert separator is dialog.shell.footer_separator
+        # The SHELL's hairline: one device column in the divider colour, and a
+        # row of its own so it can run edge to edge.
+        from sli_ui_toolkit.ui.widgets.composite.dialog_shell import _DialogHairline
+
+        assert isinstance(separator, _DialogHairline)
+        assert separator.parent() is dialog.shell.content_area
+        assert dialog.shell.content_layout.contentsMargins().left() == 0
+        assert dialog.shell.content_layout.contentsMargins().right() == 0
         assert separator.height() >= 1
     finally:
         dialog.deleteLater()
