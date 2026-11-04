@@ -14,7 +14,6 @@ logger = logging.getLogger(APP_LOGGER_NAME)
 @dataclass
 class RenderConfig:
     interpolation_method: str = "NEAREST"
-    zoom_interpolation_method: str = "NEAREST"
     movement_interpolation_method: str = "NEAREST"
     interactive_movement_interpolation_method: str = "NEAREST"
     jpeg_quality: int = 95
@@ -35,7 +34,6 @@ class RenderConfig:
     def to_dict(self) -> dict:
         return {
             "interpolation_method": self.interpolation_method,
-            "zoom_interpolation_method": self.zoom_interpolation_method,
             "movement_interpolation_method": self.movement_interpolation_method,
             "interactive_movement_interpolation_method": self.interactive_movement_interpolation_method,
             "jpeg_quality": self.jpeg_quality,
@@ -93,7 +91,6 @@ class RenderConfig:
 
         for key in (
             "interpolation_method",
-            "zoom_interpolation_method",
             "movement_interpolation_method",
             "interactive_movement_interpolation_method",
             "text_placement_mode",

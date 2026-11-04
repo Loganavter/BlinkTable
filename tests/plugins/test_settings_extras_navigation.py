@@ -34,7 +34,6 @@ def _make_prefs(**overrides):
         optimize_laser_smoothing=False,
         magnifier_intersection_highlight_enabled=False,
         magnifier_auto_color_new_instances=False,
-        zoom_interpolation_method="NEAREST",
         movement_interpolation_method="BILINEAR",
         current_video_fps=60,
         store=None,
