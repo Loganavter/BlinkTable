@@ -184,23 +184,33 @@ def test_content_floor_fits_a_720p_screen(qapp):
 
 
 def test_content_padding_follows_a_live_scale_change(qapp):
+    """The PAGES keep the design padding; the footer rule row does not.
+
+    Since the footer rule spans the content column edge to edge (owner request
+    2026-11-04), the column itself is flush and the padding moved to the pages'
+    host — the assertion follows the padding rather than the old layout.
+    """
     dialog = _build_dialog()
     try:
-        assert dialog.content_layout.contentsMargins().left() == control_edge_padding()
+        pages = dialog.shell.pages_host.layout()
+        assert pages.contentsMargins().left() == control_edge_padding()
+        # the rule's own row stays flush, which is what makes it reach both edges
+        assert dialog.content_layout.contentsMargins().left() == 0
+        assert dialog.content_layout.contentsMargins().right() == 0
 
         UiScale.get_instance().set_factor(_SCALE)
         drain_until_stable(
             qapp,
-            lambda: dialog.content_layout.contentsMargins().left(),
+            lambda: pages.contentsMargins().left(),
             timeout_ms=1000,
             poll_ms=10,
             stable_frames=2,
         )
 
-        assert dialog.content_layout.contentsMargins().left() == control_edge_padding(), (
+        assert pages.contentsMargins().left() == control_edge_padding(), (
             "the right column's padding stayed at design px after a live "
             "scale change — the divider then sits against the control groups"
         )
-        assert dialog.content_layout.contentsMargins().left() == scaled_px(8)
+        assert pages.contentsMargins().left() == scaled_px(8)
     finally:
         dialog.deleteLater()
