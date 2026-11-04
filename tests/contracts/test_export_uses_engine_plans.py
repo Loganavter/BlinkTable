@@ -175,6 +175,16 @@ _KNOWN_SUSPICIOUS_CALLS = frozenset(
         "tile_rect",
         "tile_source_key",
         "upload_tile_to_array",
+        # Level model of the strip (strip-zoom-levels, 2026-11-04): a level is
+        # ``(tile_w, tile_h, dpr)`` — the strip's own tile geometry identity and
+        # its ahead-of-time plan cache. Listed for the same reason as the strip
+        # packing names above: it is per-block render planning, NOT the export
+        # tile/LOD decision math those names are pinned against.
+        "LevelPreparation",
+        "StripLevel",
+        "_plan_tile",
+        "level_layout",
+        "strip_level",
     }
 )
 
@@ -204,6 +214,20 @@ _KNOWN_SUSPICIOUS_DEFS = frozenset(
         "tile_letterbox_geometry",
         "tile_rect",
         "tile_source_key",
+        # Strip level model (see the call set): geometry identity + its caches.
+        "LevelPreparation",
+        "StripLevel",
+        "_plan_tile",
+        "drop_level",
+        "has_level",
+        "level_for_layout",
+        "level_layout",
+        "level_tiles",
+        "levels",
+        "next_level",
+        "prepare_level",
+        "strip_level",
+        "tile_size",
     }
 )
 

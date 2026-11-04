@@ -42,7 +42,7 @@ from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
 _TILE = (160, 90)
 
 
-def _plan(block: int):
+def _plan(block: int, size=_TILE):
     """A minimal plan stand-in carrying distinct pixels per block."""
     scene = SimpleNamespace(
         split_position_visual=0.1 + 0.01 * (block % 64),
@@ -54,18 +54,18 @@ def _plan(block: int):
     )
     return SimpleNamespace(
         render_scene=scene,
-        image1=_image(block, 1),
-        image2=_image(block, 2),
-        canvas_w=_TILE[0],
-        canvas_h=_TILE[1],
+        image1=_image(block, 1, size),
+        image2=_image(block, 2, size),
+        canvas_w=size[0],
+        canvas_h=size[1],
         fill_rgba=(0, 0, 0, 0),
         geometry_letterbox=False,
         image_is_padded_composite=False,
     )
 
 
-def _image(block: int, side: int):
-    image = Image.new("RGBA", _TILE, (0, 0, 0, 255))
+def _image(block: int, side: int, size=_TILE):
+    image = Image.new("RGBA", size, (0, 0, 0, 255))
     image.putpixel((0, 0), ((block * 7) % 256, (side * 40) % 256, 17, 255))
     return image
 
@@ -93,14 +93,20 @@ class _Recording:
     def images_for(self, snapshot, tile_size):
         if snapshot.block in self._no_source:
             return None
-        pair = (_image(snapshot.block, 1), _image(snapshot.block, 2))
-        assert (pair[0].width, pair[0].height) == _TILE
-        return pair
+        size = (int(tile_size[0]), int(tile_size[1]))
+        return (_image(snapshot.block, 1, size), _image(snapshot.block, 2, size))
 
 
 def _plan_builder(snapshot, request, image1, image2):
     assert image1 is not None and image2 is not None
-    return SimpleNamespace(plan=_plan(snapshot.block))
+    surface = getattr(request, "target_surface", None)
+    size = _TILE
+    if surface is not None:
+        size = (
+            max(1, int(getattr(surface, "width", 0) or _TILE[0])),
+            max(1, int(getattr(surface, "height", 0) or _TILE[1])),
+        )
+    return SimpleNamespace(plan=_plan(snapshot.block, size))
 
 
 def _build(count: int, *, recording=None, **kwargs):
@@ -421,8 +427,23 @@ def test_framebuffer_rects_tile_a_fractional_target_without_overlap():
 # ---------------------------------------------------------------------------
 
 
+def _request(tile=_TILE):
+    """The per-tile request stand-in (its surface size is part of the cache key)."""
+    return SimpleNamespace(
+        target_surface=SimpleNamespace(width=tile[0], height=tile[1])
+    )
+
+
 def _window_with_cache(
-    cache, *, first_block=0, count=8, recording=None, tile=_TILE, tile_service=None
+    cache,
+    *,
+    first_block=0,
+    count=8,
+    recording=None,
+    tile=_TILE,
+    tile_service=None,
+    dpr=1.0,
+    plan_builder=None,
 ):
     recording = recording if recording is not None else _Recording(blocks=64)
     return build_window(
@@ -431,13 +452,36 @@ def _window_with_cache(
         count,
         tile[0],
         tile[1],
-        request=SimpleNamespace(
-            target_surface=SimpleNamespace(width=tile[0], height=tile[1])
-        ),
+        request=_request(tile),
         layout=StripBlockLayout(tile_size=tile, fps=10.0, block_count=count, cols=count),
-        plan_builder=_plan_builder,
+        plan_builder=_plan_builder if plan_builder is None else plan_builder,
         tile_cache=cache,
         tile_service=tile_service,
+        dpr=dpr,
+    )
+
+
+def _prepare(cache, *, recording=None, tile=_TILE, first_block=0, count=8, plan_builder=None, **kwargs):
+    """The adjacent-level cache fill, driven the way the band host drives it."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        level_for_layout,
+        prepare_level,
+    )
+
+    recording = recording if recording is not None else _Recording(blocks=64)
+    layout = StripBlockLayout(
+        tile_size=tile, fps=10.0, block_count=count, cols=count
+    )
+    return prepare_level(
+        recording,
+        level_for_layout(layout, kwargs.pop("dpr", 1.0)),
+        first_block,
+        count,
+        request=_request(tile),
+        layout=layout,
+        plan_builder=_plan_builder if plan_builder is None else plan_builder,
+        tile_cache=cache,
+        **kwargs,
     )
 
 
@@ -762,3 +806,331 @@ def test_the_adapter_scope_is_a_serial_not_an_address():
     assert adapter_a.cache_key == adapter_a_again.cache_key
     assert adapter_a.cache_key[0] == recording_scope(first)
     assert adapter_a.cache_key != adapter_b.cache_key
+
+
+# ---------------------------------------------------------------------------
+# Levels: identity, the ahead-of-time fill, and the level-change swap
+# ---------------------------------------------------------------------------
+
+
+def test_the_same_tile_size_at_the_same_dpr_is_one_level():
+    """A level is ``(tile_w, tile_h, dpr)`` — and only its normalized spelling.
+
+    Two windows that would plan identical pixels must land in one level bucket;
+    a different tile size or a different DPR is a different geometry and may
+    never share a plan (a cell drawn at another level's geometry is the same
+    content-identity failure as a cell from another frame).
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        strip_level,
+    )
+
+    base = strip_level(160, 90, 1.0)
+    assert base == strip_level(160, 90, 1.0)
+    assert hash(base) == hash(strip_level(160, 90, 1.0))
+    assert {base: "plan"}[strip_level(160, 90, 1.0)] == "plan"
+    # A DPR is a display property, not a measurement: 2 and 2.0 are one level.
+    assert strip_level(160, 90, 2) == strip_level(160, 90, 2.0)
+    assert strip_level(160, 90, 1.9999999) == strip_level(160, 90, 2.0)
+    # A different tile size or DPR is a different level.
+    assert strip_level(224, 126, 1.0) != base
+    assert strip_level(160, 90, 2.0) != base
+    assert strip_level(161, 90, 1.0) != base
+    # The device size is what the plan is asked for.
+    assert base.device_size == (160, 90)
+    assert strip_level(160, 90, 2.0).device_size == (320, 180)
+
+
+def test_the_level_comes_from_the_timeline_layout_and_the_target_dpr():
+    """One function, one source: the layout's tile size plus the target's DPR."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        level_for_layout,
+        strip_level,
+    )
+
+    layout = StripBlockLayout(tile_size=(224, 126), fps=10.0, block_count=8, cols=8)
+
+    assert level_for_layout(layout, 1.0) == strip_level(224, 126, 1.0)
+    assert level_for_layout(layout, 2.0) == strip_level(224, 126, 2.0)
+    assert level_for_layout(layout).tile_size == layout.tile_size
+
+
+def test_the_adjacent_level_is_one_rung_and_fits_one_array_layer():
+    """Up = the sharpest tile of the same aspect the layer holds; down = half."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        next_level,
+        strip_level,
+    )
+
+    base = strip_level(160, 90, 1.0)
+    up = next_level(base)
+    assert up == strip_level(LAYER_PX, int(round(90 * LAYER_PX / 160)), 1.0)
+    assert max(up.tile_size) == LAYER_PX, "one tile is uploaded 1:1 into one layer"
+    assert up.tile_w / up.tile_h == pytest.approx(base.tile_w / base.tile_h)
+    # At the ceiling there is no rung — never a silently equal level.
+    assert next_level(up) is None
+    assert next_level(strip_level(LAYER_PX, 100, 1.0)) is None
+    # Down goes half a tile, and the DPR is part of the identity on both rungs.
+    down = next_level(base, direction=-1)
+    assert down == strip_level(80, 45, 1.0)
+    assert next_level(strip_level(160, 90, 2.0)).dpr == 2.0
+
+
+def test_a_prepared_level_makes_the_zoom_a_swap():
+    """The whole point: the level-change tick reads plans, it does not plan.
+
+    A warm zoom must call the planner ZERO times while still producing every
+    tile of the new level (the counting planner is the discriminator: the same
+    build without the fill calls it once per tile — see the next test).
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+        strip_level,
+    )
+
+    calls: list = []
+
+    def counting(snapshot, request, image1, image2):
+        calls.append(snapshot.block)
+        return _plan_builder(snapshot, request, image1, image2)
+
+    cache = StripTileCache(plan_builder=counting)
+    recording = _Recording(blocks=64)
+    cold = _window_with_cache(cache, recording=recording, plan_builder=counting)
+    assert len(calls) == 8 and cold.level_warm is False
+
+    report = _prepare(cache, recording=recording, tile=(224, 126), plan_builder=counting)
+    assert (report.planned, report.reused, report.placeholders) == (8, 0, 0)
+    assert report.complete
+    assert len(calls) == 16, "the fill plans the prepared level's tiles"
+
+    warm = _window_with_cache(
+        cache, recording=recording, tile=(224, 126), plan_builder=counting
+    )
+    assert len(calls) == 16, "a warm level change must not call the planner"
+    assert (warm.cache_hits, warm.cache_misses) == (8, 0)
+    assert warm.level_warm is True
+    assert warm.level == strip_level(224, 126, 1.0) != cold.level
+    # The tiles are real and carry their own block's pixels at the new geometry.
+    assert all(not tile.is_placeholder for tile in warm.tiles)
+    assert [tile.block for tile in warm.tiles] == list(range(8))
+    assert warm.tiles[0].image1.size == (224, 126)
+
+
+def test_a_cold_zoom_plans_every_tile_and_reports_itself_cold():
+    """Honest fallback: no prepared level means the tick pays the plan pass."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    calls: list = []
+
+    def counting(snapshot, request, image1, image2):
+        calls.append(snapshot.block)
+        return _plan_builder(snapshot, request, image1, image2)
+
+    cache = StripTileCache(plan_builder=counting)
+    recording = _Recording(blocks=64)
+    _window_with_cache(cache, recording=recording)
+    calls.clear()
+
+    zoomed = _window_with_cache(
+        cache, recording=recording, tile=(224, 126), plan_builder=counting
+    )
+
+    assert calls == list(range(8)), "a cold level change plans every visible tile"
+    assert (zoomed.cache_hits, zoomed.cache_misses) == (0, 8)
+    assert zoomed.level_warm is False
+    assert zoomed.to_dict()["level_warm"] is False
+
+
+def test_preparation_never_touches_the_live_window_or_its_layers():
+    """A cache fill, not a render: no adopt, no cancel, no allocator traffic.
+
+    ``live_window()`` stays the visible window, it is not superseded and not
+    marked applied, and the band's ``TileTextureService`` gains no key of the
+    prepared level — this is what lets the fill run beside a frame at all.
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+        strip_level,
+    )
+
+    service = _service()
+    cache = StripTileCache()
+    recording = _Recording(blocks=64)
+    live = _window_with_cache(cache, recording=recording, tile_service=service)
+    live_keys = [
+        live.tile_source_key(tile, side)
+        for tile in live.tiles
+        for side in (1, 2)
+    ]
+    live_generation = live.generation
+
+    _prepare(cache, recording=recording, tile=(224, 126))
+
+    assert live_window() is live
+    assert is_current(live)
+    assert live.cancelled is False
+    assert live.applied is False
+    assert current_generation() == live_generation
+    assert all(service.slot_for(key, (0, 0)) is not None for key in live_keys)
+    # The prepared level registered nothing: its keys have no slot at all.
+    for block in range(8):
+        for side in (1, 2):
+            prepared_key = ("strip-tile", live.source_scope, block, 224, 126, side)
+            assert service.slot_for(prepared_key, (0, 0)) is None
+            assert not service.is_resident(prepared_key, (0, 0))
+
+
+def test_preparation_stops_the_moment_its_token_moves():
+    """Latest-wins on the injected seam: a newer level/content stops the fill."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    calls: list = []
+
+    def counting(snapshot, request, image1, image2):
+        calls.append(snapshot.block)
+        return _plan_builder(snapshot, request, image1, image2)
+
+    cache = StripTileCache(plan_builder=counting)
+    recording = _Recording(blocks=64)
+    alive = {"ok": True}
+
+    def should_continue() -> bool:
+        return alive["ok"]
+
+    real_plan = counting
+
+    def stops_after_two(snapshot, request, image1, image2):
+        planned = real_plan(snapshot, request, image1, image2)
+        if len(calls) >= 2:
+            alive["ok"] = False  # a newer level / a recording change arrived
+        return planned
+
+    report = _prepare(
+        cache,
+        recording=recording,
+        tile=(224, 126),
+        plan_builder=stops_after_two,
+        should_continue=should_continue,
+    )
+
+    assert report.stopped == "interrupted"
+    assert report.examined == 2
+    assert report.planned == 2
+    assert len(calls) == 2
+    assert cache.level_tiles(strip_level_of(cache, (224, 126))) == 2
+
+
+def strip_level_of(_cache, tile):
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        strip_level,
+    )
+
+    return strip_level(tile[0], tile[1], 1.0)
+
+
+def test_preparation_respects_its_budget_slice():
+    """Bounded: a slice over budget stops and says so (a fill pays a slice)."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    calls: list = []
+
+    def counting(snapshot, request, image1, image2):
+        calls.append(snapshot.block)
+        return _plan_builder(snapshot, request, image1, image2)
+
+    cache = StripTileCache(plan_builder=counting)
+    report = _prepare(
+        cache, tile=(224, 126), plan_builder=counting, budget_ms=0.0
+    )
+
+    assert report.stopped == "budget"
+    assert report.examined == 0
+    assert calls == []
+    assert report.complete is False
+
+
+def test_the_level_lru_evicts_the_oldest_level_first():
+    """A level is a whole window of plans: the cap is levels, not tiles."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+        strip_level,
+    )
+
+    cache = StripTileCache(max_levels=3)
+    recording = _Recording(blocks=64)
+    tiles = [(160, 90), (224, 126), (96, 54), (64, 36)]
+    for tile in tiles:
+        _window_with_cache(cache, recording=recording, tile=tile)
+        assert cache.level_tiles(strip_level(*tile, 1.0)) == 8
+
+    kept = cache.levels()
+    assert [level.tile_size for level in kept] == tiles[1:]
+    evicted = strip_level(*tiles[0], 1.0)
+    assert evicted not in kept
+    assert cache.level_tiles(evicted) == 0
+    assert cache.has_level(evicted) is False
+    # Re-entering the evicted level is a cold plan again, not a silent hit.
+    cold_again = _window_with_cache(cache, recording=recording, tile=tiles[0])
+    assert (cold_again.cache_hits, cold_again.cache_misses) == (0, 8)
+    assert [level.tile_size for level in cache.levels()] == tiles[2:] + [tiles[0]]
+
+
+def test_a_level_swap_does_not_leak_array_layers():
+    """The departed level's slots are handed back before the new ones are taken.
+
+    One allocator serves every level (the pass binds one texture array), so a
+    level change must release the previous level's keys — otherwise a second
+    level's layers accumulate and the allocator opens a second array (the
+    capacity contract's drift) or the band leaks 256 KiB per layer.
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    service = _service()
+    cache = StripTileCache()
+    recording = _Recording(blocks=64)
+    base = _window_with_cache(cache, recording=recording, tile_service=service)
+    base_keys = [
+        base.tile_source_key(tile, side) for tile in base.tiles for side in (1, 2)
+    ]
+    zoomed = _window_with_cache(
+        cache, recording=recording, tile=(224, 126), tile_service=service
+    )
+    zoom_keys = [
+        zoomed.tile_source_key(tile, side)
+        for tile in zoomed.tiles
+        for side in (1, 2)
+    ]
+
+    assert set(base_keys).isdisjoint(zoom_keys)
+    assert all(service.slot_for(key, (0, 0)) is None for key in base_keys)
+    assert all(not service.is_resident(key, (0, 0)) for key in base_keys)
+    assert all(service.slot_for(key, (0, 0)) is not None for key in zoom_keys)
+    # Exactly one level's layers are live: 2 per tile, all inside one array.
+    layers = [layer for tile in zoomed.tiles for layer in (tile.layer1, tile.layer2)]
+    assert zoomed.layer_count == 2 * zoomed.count
+    assert max(layers) < zoomed.layer_count
+
+
+def test_a_prepared_placeholder_is_not_cached():
+    """A missing proxy at the prepared level is transient: no blank cell pinned."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    cache = StripTileCache()
+    recording = _Recording(blocks=64, no_source={3})
+    report = _prepare(cache, recording=recording, tile=(160, 90))
+
+    assert report.placeholders == 1
+    assert report.planned == 7
+    assert cache.level_tiles(strip_level_of(cache, (160, 90))) == 7
+    assert report.examined == 8
