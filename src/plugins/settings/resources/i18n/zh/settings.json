@@ -71,6 +71,8 @@
     "recording_fps": "录制帧率",
     "video_recording": "视频录制",
     "search_placeholder": "搜索设置…",
-    "search_no_results": "没有匹配的设置"
+    "search_no_results": "没有匹配的设置",
+    "magnifier_border_thickness": "放大镜边框粗细（像素）",
+    "magnifier_capture_thickness": "检测区域粗细（像素）"
   }
 }

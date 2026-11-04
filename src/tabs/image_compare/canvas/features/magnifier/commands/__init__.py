@@ -30,6 +30,8 @@ from tabs.image_compare.canvas.features.magnifier.commands.queries import (
 )
 from tabs.image_compare.canvas.features.magnifier.commands.settings import (
     settings_apply_behavior,
+    settings_get_stroke,
+    settings_set_stroke,
     settings_initialize,
     settings_persist,
     settings_set_movement_interpolation,
@@ -230,6 +232,8 @@ def build_magnifier_commands(render_canvas_payload) -> dict[str, Any]:
             **kwargs,
         ),
         "settings.apply_behavior": settings_apply_behavior,
+        "settings.set_stroke": settings_set_stroke,
+        "settings.get_stroke": settings_get_stroke,
         "settings.initialize": settings_initialize,
         "settings.persist": settings_persist,
         "settings.set_optimize_movement": settings_set_optimize_movement,

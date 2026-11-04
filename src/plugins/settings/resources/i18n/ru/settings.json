@@ -71,6 +71,8 @@
     "keyboard_group_image_compare": "Сравнение изображений",
     "keyboard_group_multi_compare": "Мультисравнение",
     "recording_fps": "FPS записи",
-    "video_recording": "Запись видео"
+    "video_recording": "Запись видео",
+    "magnifier_border_thickness": "Толщина обводки лупы (px)",
+    "magnifier_capture_thickness": "Толщина области определения (px)"
   }
 }

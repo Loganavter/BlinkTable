@@ -26,6 +26,7 @@ class ImageCompareSettingsApplication:
         self._apply_magnifier_movement_optimization()
         self._apply_magnifier_interpolation()
         self._apply_magnifier_behavior_settings()
+        self._apply_magnifier_stroke()
         self._apply_metrics_settings()
         return self.render_update_needed
 
@@ -105,6 +106,30 @@ class ImageCompareSettingsApplication:
         self._save_setting("magnifier_movement_interpolation_method", method)
         self._emit_update_requested()
         self.render_update_needed = True
+
+    def _apply_magnifier_stroke(self) -> None:
+        """Loupe outline + detection-ring thickness (settings window, 2026-11-04)."""
+        section = {}
+        try:
+            section = dict(self.data.get_section("image_compare.analysis") or {})
+        except Exception:
+            section = {}
+        border = int(section.get("magnifier_border_thickness", 2))
+        capture = int(section.get("magnifier_capture_thickness", 2))
+        changes = self._execute_alias(
+            "overlay.settings.set_stroke",
+            self.store,
+            border,
+            capture,
+        )
+        if not changes:
+            return
+        if "border_thickness" in changes:
+            self._save_setting("magnifier_border_thickness", int(changes["border_thickness"]))
+        if "capture_thickness" in changes:
+            self._save_setting("magnifier_capture_thickness", int(changes["capture_thickness"]))
+        self.render_update_needed = True
+        self._emit_update_requested()
 
     def _apply_magnifier_behavior_settings(self) -> None:
         changes = self._execute_alias(
