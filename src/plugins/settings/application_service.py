@@ -24,7 +24,6 @@ from core.state_management.actions import (
     SetUIScaleFactorAction,
     SetUIModeAction,
     SetVideoRecordingFpsAction,
-    SetZoomInterpolationMethodAction,
 )
 from shared_toolkit.ui.managers.font_manager import FontManager
 from shared.video_policy import FpsPolicy, clamp_fps
@@ -232,9 +231,6 @@ class SettingsApplicationService(QObject):
         render_update_needed = self._apply_tab_viewport_settings(
             data, render_update_needed
         )
-        render_update_needed = self._apply_zoom_interpolation(
-            data, render_update_needed
-        )
         return render_update_needed
 
     def _apply_tab_viewport_settings(
@@ -260,25 +256,6 @@ class SettingsApplicationService(QObject):
         if result is None:
             return render_update_needed
         return bool(result)
-
-    def _apply_zoom_interpolation(
-        self, data: SettingsDialogData, render_update_needed: bool
-    ) -> bool:
-        vp = self.store.viewport
-        dispatcher = self.store.get_dispatcher()
-        if (
-            data.zoom_interpolation_method
-            == getattr(vp.render_config, "zoom_interpolation_method", "BILINEAR")
-        ):
-            return render_update_needed
-
-        dispatcher.dispatch(
-            SetZoomInterpolationMethodAction(data.zoom_interpolation_method),
-            scope="viewport",
-        )
-        self.store.emit_state_change("viewport")
-        self._emit_update_requested()
-        return True
 
     def _apply_misc_settings(self, data: SettingsDialogData) -> None:
         dispatcher = self.store.get_dispatcher()
@@ -307,9 +284,9 @@ class SettingsApplicationService(QObject):
             # box-less, so without eviction stale crop verdicts persist.
             # Evict via the existing core pipeline action (Store-native
             # dispatch; the tab's PipelineCacheReducer owns the pixel/
-            # preview tiers), then mirror the zoom-interpolation branch:
-            # viewport emit + update request retriggers the natural reload
-            # path (no hand re-decode).
+            # preview tiers), then use the same viewport emit + update
+            # request retrigger as the rest of the apply path (no hand
+            # re-decode).
             # NOTE: per-path EvictPipelineAction is tab-internal and the
             # host may not import tabs.* (test_ui_does_not_import_tab_internals),
             # so the global toggle evicts all pipeline tiers — every loaded

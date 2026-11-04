@@ -16,7 +16,7 @@ class RenderScene:
     channel_mode_int: int = 0
     diff_mode_active: bool = False
     diff_mode_int: int = 0
-    zoom_interpolation_method: str = "BILINEAR"
+    zoom_interpolation_method: str = "NEAREST"
     feature_overrides: dict = field(default_factory=dict)
 
 
@@ -40,14 +40,6 @@ def build_render_scene(
     )
     overlay_clip_rect = getattr(
         getattr(store, "runtime_cache", None), "overlay_clip_rect", None
-    )
-    zoom_method = str(
-        getattr(
-            getattr(viewport, "render_config", None),
-            "zoom_interpolation_method",
-            "BILINEAR",
-        )
-        or "BILINEAR"
     )
     feature_overrides = registry().build_feature_render_scene_overrides(store)
 
@@ -88,6 +80,6 @@ def build_render_scene(
         ),
         diff_mode_active=diff_mode != "off" and not is_single_preview,
         diff_mode_int=0 if is_single_preview else diff_mode_int,
-        zoom_interpolation_method=zoom_method,
+        zoom_interpolation_method="NEAREST",
         feature_overrides=feature_overrides,
     )

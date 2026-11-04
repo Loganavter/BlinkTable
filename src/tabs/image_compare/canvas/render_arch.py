@@ -29,7 +29,7 @@ class SceneFrame:
     channel_mode_int: int = 0
     diff_mode_active: bool = False
     diff_mode_int: int = 0
-    zoom_interpolation_method: str = "BILINEAR"
+    zoom_interpolation_method: str = "NEAREST"
     content_rect_px: tuple[int, int, int, int] | None = None
     image_rect_px: tuple[int, int, int, int] | None = None
     split_override: float | None = None
@@ -161,8 +161,8 @@ def build_scene_frame(
         diff_mode_active=bool(getattr(render_scene, "diff_mode_active", False)),
         diff_mode_int=int(getattr(render_scene, "diff_mode_int", 0) or 0),
         zoom_interpolation_method=str(
-            getattr(render_scene, "zoom_interpolation_method", "BILINEAR")
-            or "BILINEAR"
+            getattr(render_scene, "zoom_interpolation_method", "NEAREST")
+            or "NEAREST"
         ),
         content_rect_px=content_rect_px,
         image_rect_px=image_rect_px,
