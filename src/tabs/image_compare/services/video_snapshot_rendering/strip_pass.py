@@ -211,7 +211,13 @@ class UploadedSides:
             return True
         if tuple(recorded_size) != (int(content_size[0]), int(content_size[1])):
             return True
-        return self._layer_owner.get(layer) is not key
+        # EQUALITY, not identity: ``tile_source_key`` builds a fresh tuple on
+        # every call, so an ``is`` test here reported "another key owns this
+        # layer" for the very same key and every side re-uploaded (measured on
+        # a lease 2026-11-04: 0 of 2N sides skipped, a scroll tick at 32 blocks
+        # still 25-30 ms). The key is an immutable tuple of str/int, so ``==``
+        # is exactly "the same content identity".
+        return self._layer_owner.get(layer) != key
 
     def mark_uploaded(self, key, layer: int, content_size, service) -> None:
         layer = int(layer)
@@ -310,9 +316,21 @@ class StripPassResources:
 
         if self._samplers:
             return
+        # NO MIPMAPS on either sampler, deliberately. The strip draws each tile
+        # at its own content size (1:1 into its viewport, or a mild off-grid
+        # rescale), so a mip chain buys almost nothing — and it costs the whole
+        # tick: QRhi's ``generateMips`` is per TEXTURE, so one new tile per tick
+        # regenerated the mip chain of every layer in the array. Measured on a
+        # lease 2026-11-04 at 32 blocks: 45.0 ms per tick with mips against
+        # 3.3 ms without, i.e. the entire remaining interaction cost.
+        # Correctness, not only speed: a layer whose pixels are reused across
+        # windows would carry the PREVIOUS tile's mip chain, and a shader that
+        # samples a mip level would draw that stale content — the identity
+        # failure this pass exists to prevent. Level 0 is the uploaded frame
+        # itself, so nothing is lost.
         for name, filter_mode, mip_mode in (
             ("nearest", QRhiSampler.Filter.Nearest, QRhiSampler.Filter.None_),
-            ("linear", QRhiSampler.Filter.Linear, QRhiSampler.Filter.Linear),
+            ("linear", QRhiSampler.Filter.Linear, QRhiSampler.Filter.None_),
         ):
             sampler = self.rhi.newSampler(
                 filter_mode,
@@ -494,13 +512,12 @@ class StripPassResources:
                     continue
                 self._uploaded.mark_uploaded(key, layer, size, service)
         cursor.submit()
-        # ``upload_tile_to_array`` defers mip generation to its caller (it must
-        # not share a batch with the upload it reads). One window uploads once,
-        # so the whole bound array is regenerated once here.
-        if 0 in dirty_layers:
-            self._array._ensure_tile_array(0)
-            cursor.batch.generateMips(self._array.tile_arrays[0])
-            cursor.submit()
+        # No mip generation: the samplers sample level 0 only (see
+        # ``_ensure_samplers``). ``dirty_layers`` is still threaded through
+        # ``upload_tile_to_array`` because that call takes it, but nothing
+        # consumes it here — regenerating the whole array's mips per tick was
+        # 45 ms of a 3.3 ms tick and would also expose a reused layer's stale
+        # mip chain.
         self._uploaded_generation = window.generation
 
     def _stage_dividers(self, cursor: _Updates, window: StripWindow) -> None:

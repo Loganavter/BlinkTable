@@ -689,6 +689,14 @@ def test_the_upload_skip_predicate_is_fail_closed():
 
     uploaded.mark_uploaded(key, 4, (160, 90), service)
     assert uploaded.needs_upload(key, 4, (160, 90), service) is False
+    # A key REBUILT from the same parts is the same content identity: the
+    # production key is a fresh tuple on every call, so an identity comparison
+    # here answered "another key owns this layer" for the very same key and no
+    # side was ever skipped (measured on a lease 2026-11-04: 0 of 2N sides,
+    # a 32-block scroll tick still 25-30 ms).
+    rebuilt = tuple(list(key))  # a genuinely new tuple (``tuple(t)`` returns t)
+    assert rebuilt is not key and rebuilt == key
+    assert uploaded.needs_upload(rebuilt, 4, (160, 90), service) is False
     # The assigned slot changed: the pixels are somewhere else now.
     assert uploaded.needs_upload(key, 5, (160, 90), service) is True
     # The content size changed under the same key (a different upload shape).
