@@ -30,10 +30,19 @@ What one case measures:
   gate into a disk test.
 * ``total_ms`` — build + render, compared with the case's budget.
 
-Interactions are timed as a tick: a scroll (new first block, same zoom) and a
-zoom (new tile size), each building the newest window and rendering it, with
-the latest-wins rule exercised — an older window a newer one superseded is
-dropped and never applied, and its build is reported, not counted.
+Interactions are timed as a tick: a scroll (new first block, same level) and a
+zoom (a new level), each building the newest window and rendering it, with the
+latest-wins rule exercised — an older window a newer one superseded is dropped
+and never applied, and its build is reported, not counted.
+
+Levels: a zoom is a LEVEL change (the tile geometry), so it is measured twice.
+``warm-zoom`` is the tick the level model exists for — the next level was
+planned ahead by ``strip_window.prepare_level``, so the tick swaps prepared
+plans and is compared with the interaction budget. ``cold-zoom`` is the first
+zoom into a level nothing prepared: it pays the whole plan pass and is reported
+as a reference, NEVER as a budget pass or fail (a cold first zoom is the honest
+fallback, not a regression). The fill's own cost of preparing the next level is
+printed as ``prepare`` — it belongs to the fill class, not to the tick.
 
 Flags: ``--blocks 8,17,32``, ``--fill-budget-ms 50``,
 ``--interaction-budget-ms 10``, ``--repeat N`` (median of N),
@@ -70,9 +79,12 @@ Measured status (2026-11-04, this host, leased display for the GPU column):
   ``TileTextureService``, content-addressed tile keys, a per-pass upload skip),
   so a scroll tick uploads only the block that newly entered the range — the
   rig keeps one allocator across ticks for exactly that reason;
-* a zoom changes the tile size, so every tile is re-planned (~12 ms at 8
-  blocks): the interaction budget is a scroll/resize number, a geometry change
-  costs a planning pass.
+* a zoom changes the LEVEL (tile size + DPR), so every tile of the new level is
+  a fresh plan (~15 ms of a 17.3 ms tick at 8 blocks) — unless that level was
+  planned ahead: ``strip_window.prepare_level`` fills the level cache on the fill
+  side of the budget, and the level-change tick then only packs and draws
+  (``warm-zoom``). The first zoom into an unprepared level stays cold and is
+  reported as such.
 """
 
 # Audit-Meta: pattern=devtool-pipeline reason="one latency gate: the band's own build seam, the per-case warm-up/median measurement, the latest-wins proof and the budget table are one measurement — splitting the rig from the table would let them disagree about what was timed"
@@ -119,11 +131,13 @@ class CaseResult:
     """One measured case: the stages, the budget and the verdict."""
 
     name: str
-    kind: str  # "fill" | "interaction"
+    kind: str  # "fill" | "interaction" | "cold"
     budget_ms: float
     build_ms: float
     render_ms: float | None = None
     present_ms: float | None = None
+    #: Planning the level ahead of the tick (a cache fill, outside the budget).
+    prepare_ms: float | None = None
     detail: str = ""
     gpu: bool = True
 
@@ -135,6 +149,12 @@ class CaseResult:
     def verdict(self) -> str:
         if not self.gpu:
             return "build-only"
+        if self.kind == "cold":
+            # The first zoom into an unprepared level pays its plan pass by
+            # design. It is measured and printed, never turned into a pass/fail:
+            # a cold tick is the honest fallback, and the level model's promise
+            # is about the tick AFTER the fill (the warm-zoom row).
+            return "cold"
         if self.kind == "fill":
             # The owner's numbers: <= 50 ms fill, < 10 ms interaction.
             return "pass" if self.total_ms <= self.budget_ms else "FAIL"
@@ -166,14 +186,7 @@ class _Rig:
         # tick reuses the planned tiles AND the array layers of the blocks that
         # stayed visible (StripBandHost does the same), and a fresh adapter or
         # allocator per tick would hide that reuse.
-        if self.recording is None:
-            # ``varied``: every block carries its OWN frame, as a real
-            # recording does. With one shared pair per block the planner's
-            # single-slot image-prep cache would answer for the next tile and
-            # the table would report a strip no recording produces.
-            self.recording = batch.band_recording(
-                self.store, self.image1, self.image2, self.exporter, varied=True
-            )
+        self.ensure_recording()
         if self.service is None:
             self.service = _tile_service()
         return _band_window(
@@ -185,6 +198,49 @@ class _Rig:
             tile_service=self.service,
         )
 
+    def prepare(self, count: int, *, first_block: int = 0, tile=None, budget_ms=None):
+        """Fill the level cache for the tile the next zoom uses (not a tick).
+
+        Drives ``strip_window.prepare_level`` with the same recording, layout and
+        request the window build uses, so the level it fills is exactly the one
+        ``build(tile=...)`` will read.
+        """
+        from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+            StripBlockLayout,
+            level_for_layout,
+            prepare_level,
+        )
+
+        tile_w, tile_h = self.tile if tile is None else tile
+        self.ensure_recording()
+        layout = StripBlockLayout(
+            tile_size=(int(tile_w), int(tile_h)),
+            fps=FPS,
+            block_count=int(count),
+            cols=int(count),
+        )
+        return prepare_level(
+            self.recording,
+            level_for_layout(layout, 1.0),
+            int(first_block),
+            int(count),
+            request=_band_request(int(tile_w), int(tile_h)),
+            layout=layout,
+            tile_cache=self.cache,
+            budget_ms=budget_ms,
+        )
+
+    def ensure_recording(self):
+        if self.recording is None:
+            # ``varied``: every block carries its OWN frame, as a real
+            # recording does. With one shared pair per block the planner's
+            # single-slot image-prep cache would answer for the next tile and
+            # the table would report a strip no recording produces.
+            self.recording = batch.band_recording(
+                self.store, self.image1, self.image2, self.exporter, varied=True
+            )
+        return self.recording
+
     def clear_cache(self) -> None:
         """Drop planned tiles: a fill/zoom case measures a cold planning pass."""
         self.cache.clear()
@@ -192,6 +248,16 @@ class _Rig:
         # A cold fill is also a cold allocator: no layer of a previous case may
         # stand in for the upload this case is meant to pay for.
         self.service = None
+
+    def clear_plans(self) -> None:
+        """Drop the planned LEVELS but keep the tile; a level swap, not a fill.
+
+        A level change reuses the band's ONE allocator (the pass releases the
+        departed level's keys itself), so measuring it with a fresh allocator
+        would charge the tick for an array rebuild production never does.
+        """
+        self.cache.clear()
+        self.recording = None
 
 
 def _timed(fn):
@@ -377,6 +443,8 @@ def _interaction_case(rig: _Rig, count: int, *, kind: str, args) -> CaseResult:
                     lambda: rig.build(count, first_block=step * (2 * index + 2))
                 )
             else:
+                # The COLD zoom: nothing prepared this level, so the tick plans
+                # every tile. Measured for the record, never budgeted.
                 rig.clear_cache()
                 stale, stale_ms = _timed(lambda: rig.build(count))
                 window, build_ms = _timed(
@@ -397,7 +465,7 @@ def _interaction_case(rig: _Rig, count: int, *, kind: str, args) -> CaseResult:
     name = f"interaction-{kind}-{count}"
     return CaseResult(
         name=name,
-        kind="interaction",
+        kind="cold" if kind == "zoom" else "interaction",
         budget_ms=float(args.interaction_budget_ms),
         build_ms=statistics.median(builds),
         render_ms=statistics.median(frames) if frames else None,
@@ -408,7 +476,83 @@ def _interaction_case(rig: _Rig, count: int, *, kind: str, args) -> CaseResult:
             grabs,
             extra=(
                 "superseded build med "
+                f"{statistics.median(dropped):.1f} ms (dropped, not applied); "
+                "cold level: plans every tile, no budget verdict"
+                if kind == "zoom"
+                else "superseded build med "
                 f"{statistics.median(dropped):.1f} ms (dropped, not applied)"
+            ),
+            cold=f"{cold_ms:.1f} ms",
+            cold_label=(
+                "cold (init + first upload)" if gpu else "cold (decode + plan caches)"
+            ),
+        ),
+        gpu=gpu,
+    )
+
+
+def _warm_zoom_case(rig: _Rig, count: int, *, args) -> CaseResult:
+    """The level-change tick the level model exists for: a SWAP, not a plan.
+
+    Shape per repeat: drop the plans (the level cache and the recording scope, as
+    a recording switch or a fresh band would), build the CURRENT level (a fill —
+    this is what ``StripBandHost`` does when a level is first planned), fill the
+    NEXT level's cache the way the host's ``prepare_adjacent_level`` does, then
+    time the level-change tick itself and draw it.
+
+    The tick's build is asserted to be a swap (no cache miss, ``level_warm``):
+    if the fill did not take, the row would silently measure a cold plan under a
+    warm label, and a gate that reports the wrong mechanism is worse than a red
+    one. ``prepare`` is printed and deliberately NOT added to the tick's total —
+    it is the fill class's cost (see the module docstring's budget split).
+    """
+    gpu = not args.cpu_only
+    tile = tuple(args.zoom_tile)
+    surface, cold_ms = _warm(rig, count, tile=tile, gpu=gpu)
+    builds, frames, grabs, prepares = [], [], [], []
+    try:
+        for _ in range(max(1, int(args.repeat))):
+            rig.clear_plans()
+            rig.build(count)  # the level the user is on (cold -> fills its plans)
+            report, prepare_ms = _timed(lambda: rig.prepare(count, tile=tile))
+            if not report.complete or report.placeholders:
+                raise RuntimeError(
+                    "level fill did not complete: "
+                    f"planned {report.planned}, reused {report.reused}, "
+                    f"placeholders {report.placeholders}, stopped={report.stopped!r}"
+                )
+            prepares.append(prepare_ms)
+            window, build_ms = _timed(lambda: rig.build(count, tile=tile))
+            if not window.level_warm or window.cache_misses:
+                raise RuntimeError(
+                    "warm zoom measured a cold plan: "
+                    f"{window.cache_hits} hits / {window.cache_misses} misses at "
+                    f"level {window.level.to_dict()}"
+                )
+            builds.append(build_ms)
+            if surface is not None:
+                frame_ms, grab_ms = surface.render(window)
+                frames.append(frame_ms)
+                grabs.append(grab_ms)
+    finally:
+        if surface is not None:
+            surface.close()
+    return CaseResult(
+        name=f"warm-zoom-{count}",
+        kind="interaction",
+        budget_ms=float(args.interaction_budget_ms),
+        build_ms=statistics.median(builds),
+        render_ms=statistics.median(frames) if frames else None,
+        present_ms=statistics.median(grabs) if grabs else None,
+        prepare_ms=statistics.median(prepares),
+        detail=_detail(
+            builds,
+            frames,
+            grabs,
+            extra=(
+                "swap: prepared level taken, 0 plans on the tick; "
+                f"prepare med {statistics.median(prepares):.1f} ms "
+                "(cache fill, outside the budget)"
             ),
             cold=f"{cold_ms:.1f} ms",
             cold_label=(
@@ -451,9 +595,10 @@ def _print_table(results, *, gpu: bool, quiet: bool) -> None:
     print("-" * 78)
     for result in results:
         render = "n/a" if result.render_ms is None else f"{result.render_ms:.2f}"
+        budget = "-" if result.kind == "cold" else f"{result.budget_ms:.1f}"
         print(
             f"{result.name:<22} | {result.build_ms:>8.2f} | {render:>9} | "
-            f"{result.total_ms:>8.2f} | {result.budget_ms:>9.1f} | "
+            f"{result.total_ms:>8.2f} | {budget:>9} | "
             f"{result.verdict}"
         )
     print()
@@ -484,9 +629,10 @@ def _report(results, *, gpu: bool, args) -> int:
         return 1
     print()
     print(
-        "all cases within budget: fill <= "
+        "all budgeted cases within budget: fill <= "
         f"{args.fill_budget_ms:g} ms, interaction < "
-        f"{args.interaction_budget_ms:g} ms"
+        f"{args.interaction_budget_ms:g} ms "
+        "(a cold level change is reported, never budgeted)"
     )
     return 0
 
@@ -550,6 +696,15 @@ def _tile_service():
     return TileTextureService(max_array_size=STRIP_ARRAY_CAPACITY)
 
 
+def _band_request(tile_w, tile_h):
+    """The host's own per-tile request (``render_request``) for a tile size."""
+    from tabs.image_compare.plugins.video_editor.presenter_parts.strip_band import (
+        render_request as band_render_request,
+    )
+
+    return band_render_request(int(tile_w), int(tile_h))
+
+
 def _band_window(recording, *, count, first_block, tile, tile_cache, tile_service):
     """``build_window`` driven with the host's own pieces and ONE allocator.
 
@@ -562,9 +717,6 @@ def _band_window(recording, *, count, first_block, tile, tile_cache, tile_servic
     of the blocks that stayed visible; with a fresh allocator per window the
     gate would measure the full re-upload this tick must no longer pay.
     """
-    from tabs.image_compare.plugins.video_editor.presenter_parts.strip_band import (
-        render_request as band_render_request,
-    )
     from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
         StripBlockLayout,
         build_window,
@@ -586,7 +738,7 @@ def _band_window(recording, *, count, first_block, tile, tile_cache, tile_servic
         int(count),
         tile_w,
         tile_h,
-        request=band_render_request(tile_w, tile_h),
+        request=_band_request(tile_w, tile_h),
         layout=layout,
         tile_cache=tile_cache,
         tile_service=tile_service,
@@ -631,6 +783,20 @@ def _self_test() -> int:
     check(
         "a lowered budget flips a passing case",
         CaseResult("scroll", "interaction", 5.0, 6.0, 3.0).verdict == "FAIL",
+    )
+    cold_zoom = CaseResult("interaction-zoom-8", "cold", 10.0, 15.0, 2.3)
+    check("a cold zoom has no pass/fail verdict", cold_zoom.verdict == "cold")
+    check("a cold zoom never fails", not cold_zoom.failed)
+    check(
+        "a cold zoom stays cold even when it is slow",
+        CaseResult("interaction-zoom-8", "cold", 10.0, 90.0, 5.0).verdict
+        == "cold",
+    )
+    warm_zoom = CaseResult("warm-zoom-8", "interaction", 10.0, 0.9, 2.3)
+    check("a warm zoom is an interaction", warm_zoom.verdict == "pass")
+    check(
+        "a warm zoom over the budget fails",
+        CaseResult("warm-zoom-8", "interaction", 10.0, 8.0, 2.3).verdict == "FAIL",
     )
     build_only = CaseResult("fill-8", "fill", 50.0, 30.0, None, gpu=False)
     check("build-only verdict", build_only.verdict == "build-only")
@@ -754,6 +920,11 @@ def main(argv: list[str] | None = None) -> int:
             results.append(
                 _interaction_case(rig, int(count), kind="scroll", args=args)
             )
+        # The level model: a prepared level change is a swap (budgeted), the
+        # first zoom into an unprepared one is a reference (never budgeted).
+        results.append(
+            _warm_zoom_case(rig, int(args.blocks[0]), args=args)
+        )
         results.append(
             _interaction_case(rig, int(args.blocks[0]), kind="zoom", args=args)
         )

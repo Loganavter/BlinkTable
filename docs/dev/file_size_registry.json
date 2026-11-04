@@ -681,6 +681,17 @@
       }
     },
     {
+      "path": "src/tabs/image_compare/plugins/video_editor/presenter_parts/strip_band.py",
+      "limit": 500,
+      "marker": "Audit-Meta:",
+      "raw": "pattern=single-owner size=exempt reason=\"one strip band host: the window lifecycle (build, fail-open on a bad build, supersede, release) and the level cache fill share one state machine — _window/_key/_layout/_adapter plus the fill's latest-wins token and resume cursor all describe 'which view am I drawing and what prepared it'; splitting the fill out would leave the host holding half a state machine and the fill reaching back into it\"",
+      "parsed": {
+        "pattern": "single-owner",
+        "size": "exempt",
+        "reason": "one strip band host: the window lifecycle (build, fail-open on a bad build, supersede, release) and the level cache fill share one state machine — _window/_key/_layout/_adapter plus the fill's latest-wins token and resume cursor all describe 'which view am I drawing and what prepared it'; splitting the fill out would leave the host holding half a state machine and the fill reaching back into it"
+      }
+    },
+    {
       "path": "src/tabs/image_compare/plugins/video_editor/services/export_config.py",
       "limit": 500,
       "marker": "Audit-Meta:",
