@@ -340,10 +340,19 @@ def test_band_tile_is_not_letterboxed_for_a_thumbnail_shaped_pair(qapp):
 
 
 def test_scrolling_moves_the_window_to_later_blocks(qapp):
+    """A forward scroll moves the window to later blocks.
+
+    The step is RELATIVE to where the view sits: since toolkit #145 a zoom-in
+    keeps its centre, so ``fit_view(); set_zoom(1.0)`` no longer leaves the
+    scroll at 0 and an absolute ``scroll_to(400)`` would move the view
+    backwards (this test encoded that old collapse).
+    """
     harness = _Harness(qapp)
     try:
         _, first_before, _ = _layout(harness)
-        harness.scroll_to(400)
+        bar = harness.scroll.horizontalScrollBar()
+        step = max(1, (bar.maximum() - bar.value()) // 4)
+        harness.scroll_to(bar.value() + step)
         _, first_after, _ = _layout(harness)
         assert first_after > first_before
     finally:

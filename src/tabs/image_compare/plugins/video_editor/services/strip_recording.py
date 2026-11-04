@@ -41,6 +41,7 @@ from tabs.image_compare.services.video_snapshot_rendering.geometry import (
     THUMBNAIL_TARGET_SIZE,
 )
 from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+    recording_scope,
     LAYER_PX,
     StripBlockLayout,
 )
@@ -210,8 +211,13 @@ class StripRecordingAdapter:
         The adapter itself is rebuilt on every view change, so a plan cache
         scoped by the adapter would never hit; the recording it wraps is the
         content, and the host clears its cache when that content changes.
+
+        The recording half comes from ``recording_scope``, never ``id()``: the
+        scope now also names ARRAY SLOTS in the pass, so a collected recording
+        whose address is reused by the next one must not inherit its layers
+        (that would draw a cell from another frame's pixels).
         """
-        return (id(self._recording), float(self.fps))
+        return (recording_scope(self._recording), float(self.fps))
 
     def evaluate_at(self, timestamp):
         """The frame state at ``timestamp`` — the recording's own evaluation."""

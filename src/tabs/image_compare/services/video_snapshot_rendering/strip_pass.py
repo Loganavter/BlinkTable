@@ -17,7 +17,8 @@ Resources are per RHI object and survive across windows (buffers and SRBs are
 recreated only when the tile count changes, the array only when the layer
 geometry/capacity changes); ``release_window_resources`` mirrors a widget's
 ``releaseResources``. One window superseding another does not tear anything
-down — the next window uploads into the same array.
+down — the next window uploads only the tiles it does not already have (see
+``UploadedSides``): the array and its pixels survive a scroll tick.
 """
 
 # Audit-Meta: pattern=state-machine size=exempt reason="one strip GPU-resource lifecycle (samplers/array/SRBs/per-tile buffers/divider shell/upload) against one target; the upload guard, the capacity sink and the mip deferral share the array state, so splitting threads that state through every helper"
@@ -63,6 +64,11 @@ def _qimage_from_pil(image):
     data = rgba.tobytes("raw", "RGBA")
     qimage = QImage(data, rgba.width, rgba.height, QImage.Format.Format_RGBA8888)
     return qimage.copy()
+
+
+def _upload_sides(tile):
+    """``(side, array layer, image)`` for one tile — the upload's own view."""
+    return ((1, int(tile.layer1), tile.image1), (2, int(tile.layer2), tile.image2))
 
 
 def pad_uniform_block(block: bytes, stride: int = UNIFORM_STRIDE) -> bytes:
@@ -160,6 +166,78 @@ class _Updates:
 
 
 # ---------------------------------------------------------------------------
+# Upload bookkeeping
+# ---------------------------------------------------------------------------
+
+
+class UploadedSides:
+    """Which tile sides this pass already has in its array (one RHI generation).
+
+    A scroll tick moves the visible range by a block or two, so nearly every
+    tile of the new window is the SAME frame it was a moment ago, in the SAME
+    array layer. Re-uploading it was almost the whole tick: 5.2/17.4/32.4 ms of
+    render at 8/17/32 blocks against 0.8/1.3/2.4 ms for a draw-only frame of
+    the same window (measured 2026-11-04).
+
+    Fail-closed, because the failure it can cause is the worst one this path
+    has — a cell showing a neighbour's pixels: a side is skipped ONLY when its
+    key, the layer it draws from, the uploaded content size AND the allocator
+    that handed that layer out all still match the record. Anything unknown (a
+    key never seen, a layer that moved, another key now owning the layer, a
+    different ``TileTextureService``, a size change) means UPLOAD. A redundant
+    upload is only a cost.
+    """
+
+    __slots__ = ("_records", "_layer_owner")
+
+    def __init__(self) -> None:
+        #: key -> (service, layer, (content_w, content_h))
+        self._records: dict[object, tuple[object, int, tuple[int, int]]] = {}
+        #: layer -> the key whose pixels that layer holds right now
+        self._layer_owner: dict[int, object] = {}
+
+    def needs_upload(self, key, layer: int, content_size, service) -> bool:
+        """Whether this side must be uploaded again (True = upload, fail-closed)."""
+        record = self._records.get(key)
+        if record is None:
+            return True
+        recorded_service, recorded_layer, recorded_size = record
+        layer = int(layer)
+        if recorded_service is not service:
+            # A slot number means nothing without the allocator that gave it
+            # out: a rebuilt service numbers layers from zero again.
+            return True
+        if recorded_layer != layer:
+            return True
+        if tuple(recorded_size) != (int(content_size[0]), int(content_size[1])):
+            return True
+        # EQUALITY, not identity: ``tile_source_key`` builds a fresh tuple on
+        # every call, so an ``is`` test here reported "another key owns this
+        # layer" for the very same key and every side re-uploaded (measured on
+        # a lease 2026-11-04: 0 of 2N sides skipped, a scroll tick at 32 blocks
+        # still 25-30 ms). The key is an immutable tuple of str/int, so ``==``
+        # is exactly "the same content identity".
+        return self._layer_owner.get(layer) != key
+
+    def mark_uploaded(self, key, layer: int, content_size, service) -> None:
+        layer = int(layer)
+        self._records[key] = (
+            service,
+            layer,
+            (int(content_size[0]), int(content_size[1])),
+        )
+        self._layer_owner[layer] = key
+
+    def clear(self) -> None:
+        """Forget everything (the array was rebuilt or released)."""
+        self._records.clear()
+        self._layer_owner.clear()
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+
+# ---------------------------------------------------------------------------
 # Per-RHI resources
 # ---------------------------------------------------------------------------
 
@@ -187,6 +265,27 @@ def release_window_resources(rhi=None) -> None:
         entry.release()
 
 
+def forget_uploads(rhi=None) -> None:
+    """Force the live window on ``rhi`` to re-upload every tile (all when None).
+
+    The skip rule matches a tile's content key, layer, size and allocator —
+    which says nothing about a recording whose CONTENT changed under the same
+    identity (a cut/undo re-uses the recording object, the fps and the block
+    numbers). The band host calls this whenever it drops its plan cache, so a
+    cut is re-uploaded instead of being painted from the pre-cut pixels. It is
+    the fail-closed valve of ``UploadedSides``: never skip when identity is
+    uncertain.
+    """
+    if rhi is None:
+        resources = list(_PASSES.values())
+    else:
+        entry = _PASSES.get(id(rhi))
+        resources = [entry] if entry is not None else []
+    for entry in resources:
+        entry._uploaded.clear()
+        entry._uploaded_generation = -1
+
+
 class StripPassResources:
     """Persistent QRhi state for the strip window pass on one RHI object."""
 
@@ -203,6 +302,7 @@ class StripPassResources:
         self._instance_buffers: list = []
         self._srbs: list = []
         self._uploaded_generation = -1
+        self._uploaded = UploadedSides()
         self._upload_qimages: list = []
         self._divider = None
         self._divider_target = None
@@ -216,9 +316,21 @@ class StripPassResources:
 
         if self._samplers:
             return
+        # NO MIPMAPS on either sampler, deliberately. The strip draws each tile
+        # at its own content size (1:1 into its viewport, or a mild off-grid
+        # rescale), so a mip chain buys almost nothing — and it costs the whole
+        # tick: QRhi's ``generateMips`` is per TEXTURE, so one new tile per tick
+        # regenerated the mip chain of every layer in the array. Measured on a
+        # lease 2026-11-04 at 32 blocks: 45.0 ms per tick with mips against
+        # 3.3 ms without, i.e. the entire remaining interaction cost.
+        # Correctness, not only speed: a layer whose pixels are reused across
+        # windows would carry the PREVIOUS tile's mip chain, and a shader that
+        # samples a mip level would draw that stale content — the identity
+        # failure this pass exists to prevent. Level 0 is the uploaded frame
+        # itself, so nothing is lost.
         for name, filter_mode, mip_mode in (
             ("nearest", QRhiSampler.Filter.Nearest, QRhiSampler.Filter.None_),
-            ("linear", QRhiSampler.Filter.Linear, QRhiSampler.Filter.Linear),
+            ("linear", QRhiSampler.Filter.Linear, QRhiSampler.Filter.None_),
         ):
             sampler = self.rhi.newSampler(
                 filter_mode,
@@ -231,23 +343,35 @@ class StripPassResources:
                 raise StripWindowError(f"strip: failed to create {name} sampler")
             self._samplers[name] = sampler
 
-    def _ensure_array(self, window: StripWindow) -> None:
+    def _ensure_array(self, window: StripWindow, service) -> None:
         from tabs.image_compare.canvas.rhi_renderer.array_resources import (
             ArrayResources,
         )
 
+        # The allocator must follow the array it is drawn into, and the host may
+        # hand the band a different one than the previous window used: push the
+        # sink on every render, not only when the array is recreated, or a
+        # replaced service would keep allocating layers this array cannot
+        # address (tests/contracts/test_capacity_agreement.py).
+        resize = getattr(service, "set_max_array_size", None)
+        sink = resize if callable(resize) else None
         needs_new = (
             self._array is None
             or self._array_layer_px != int(window.layer_px)
             or self._array_capacity != int(window.layer_count)
         )
         if not needs_new:
+            self._array.set_capacity_sink(sink)
             return
         if self._array is not None:
             self._array.release()
         self._array = None
         # SRBs bind the array texture, so they die with it.
         self._srbs = []
+        # Every layer of the new array is a fresh texture: whatever was
+        # uploaded belonged to the array that just died.
+        self._uploaded.clear()
+        self._uploaded_generation = -1
         self._array = ArrayResources(
             rhi_getter=lambda: self.rhi,
             sampler_getter=lambda name: self._samplers[name],
@@ -260,11 +384,7 @@ class StripPassResources:
         # driver refuses (ArrayResources halves it on a failed probe), or the
         # plan keeps sampling layers this array cannot address
         # (tests/contracts/test_capacity_agreement.py).
-        service = window.tile_service
-        if service is not None:
-            self._array.set_capacity_sink(
-                lambda capacity: service.set_max_array_size(capacity)
-            )
+        self._array.set_capacity_sink(sink)
         self._array._ensure_tile_array(0)
         self._array_layer_px = int(window.layer_px)
         self._array_capacity = int(window.layer_count)
@@ -354,37 +474,50 @@ class StripPassResources:
         self._srbs = srbs
 
     # -- per-frame work ------------------------------------------------
-    def _upload(self, cursor: _Updates, window: StripWindow) -> None:
+    def _upload(self, cursor: _Updates, window: StripWindow, service) -> None:
         if self._uploaded_generation == window.generation:
             return
         cursor.batch.uploadStaticBuffer(self._vertex_buffer, self._vertex_bytes)
         cursor.submit()
         # The upload descriptions hold their QImage by reference; a collected
         # source leaves the GPU upload reading freed pixels (observed as
-        # blank/garbage tiles in phase 0). Keep them alive until the window
-        # changes.
+        # blank/garbage tiles in phase 0). Only THIS window's uploads are kept:
+        # a skipped tile needs no QImage — its pixels are already in the array,
+        # and the planned tile that carries them outlives the window (the band
+        # host's ``StripTileCache``).
         self._upload_qimages = []
         dirty_layers: dict[int, set[int]] = {}
         for tile in window.tiles:
-            for side, image in ((1, tile.image1), (2, tile.image2)):
+            for side, layer, image in _upload_sides(tile):
+                key = window.tile_source_key(tile, side)
+                size = (int(image.width), int(image.height))
+                if not self._uploaded.needs_upload(key, layer, size, service):
+                    continue
                 qimage = _qimage_from_pil(image)
                 self._upload_qimages.append(qimage)
+                refused_before = self._array.array_upload_skipped_count
                 self._array.upload_tile_to_array(
-                    window.tile_service,
-                    window.tile_source_key(tile, side),
+                    service,
+                    key,
                     (0, 0),
                     qimage,
                     cursor.batch,
                     dirty_layers,
                 )
+                if self._array.array_upload_skipped_count != refused_before:
+                    # The bound guard refused the write (a layer or an image the
+                    # array cannot hold): nothing reached the GPU, so recording
+                    # it as uploaded would make every later frame skip a tile
+                    # that was never drawn.
+                    continue
+                self._uploaded.mark_uploaded(key, layer, size, service)
         cursor.submit()
-        # ``upload_tile_to_array`` defers mip generation to its caller (it must
-        # not share a batch with the upload it reads). One window uploads once,
-        # so the whole bound array is regenerated once here.
-        if 0 in dirty_layers:
-            self._array._ensure_tile_array(0)
-            cursor.batch.generateMips(self._array.tile_arrays[0])
-            cursor.submit()
+        # No mip generation: the samplers sample level 0 only (see
+        # ``_ensure_samplers``). ``dirty_layers`` is still threaded through
+        # ``upload_tile_to_array`` because that call takes it, but nothing
+        # consumes it here — regenerating the whole array's mips per tick was
+        # 45 ms of a 3.3 ms tick and would also expose a reused layer's stale
+        # mip chain.
         self._uploaded_generation = window.generation
 
     def _stage_dividers(self, cursor: _Updates, window: StripWindow) -> None:
@@ -510,7 +643,7 @@ class StripPassResources:
 
         self._target = target
         self._ensure_samplers()
-        self._ensure_array(window)
+        self._ensure_array(window, tile_service)
         self._ensure_vertex_buffer()
         self._ensure_tile_buffers(window)
         self._array.ensure_array_pipeline(target)
@@ -519,7 +652,7 @@ class StripPassResources:
         self._array._ensure_tile_array(0)
 
         cursor = _Updates(self.rhi, command_buffer)
-        self._upload(cursor, window)
+        self._upload(cursor, window, tile_service)
         self._stage_dividers(cursor, window)
         self._stage_tile_uniforms(cursor, window)
 
@@ -568,6 +701,7 @@ class StripPassResources:
         self._srbs = []
         self._tile_count = 0
         self._uploaded_generation = -1
+        self._uploaded.clear()
         self._upload_qimages = []
         for sampler in self._samplers.values():
             try:
@@ -620,6 +754,8 @@ def render_strip_window(
 
 __all__ = [
     "StripPassResources",
+    "UploadedSides",
+    "forget_uploads",
     "framebuffer_rects",
     "pad_uniform_block",
     "release_window_resources",

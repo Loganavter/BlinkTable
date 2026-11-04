@@ -10,10 +10,11 @@ recorded in ``plan-video-strip-atlas-2026-10-30``, are:
   ``tests/contracts/test_strip_no_debounce.py``.
 
 This devtool is the measurement half. It drives the SAME seam the band drives
-(``bench_strip_batch.build_band_window``: the timeline's tile from
-``strip_recording.strip_tile_size``, the exporter's proxy pair, the band's
-``render_request``, the host's ``StripRecordingAdapter``) and times the stages
-separately, so a red verdict names what to fix instead of "the strip is slow".
+(``_band_window``: the timeline's tile from ``strip_recording.strip_tile_size``,
+the exporter's proxy pair, the band's ``render_request``, the host's
+``StripRecordingAdapter`` and the host's ONE ``TileTextureService``) and times
+the stages separately, so a red verdict names what to fix instead of "the strip
+is slow".
 
 What one case measures:
 
@@ -62,9 +63,13 @@ Measured status (2026-11-04, this host, leased display for the GPU column):
   3/7/12 ms at 8/17/32 blocks;
 * a planned tile is reused across windows (``StripTileCache``) and the plan
   builder outlives a window, so a scroll tick plans only the newly exposed
-  block: build 0.3/0.6/1.9 ms, and the tick's cost is now the pass itself
-  (upload + draw 5/15/25 ms at 8/17/32 — the upload half is what still keeps
-  17/32 blocks over the 10 ms interaction budget);
+  block: build 0.3/0.6/1.9 ms, and the tick's cost was then the pass itself
+  (upload + draw 5.2/17.4/32.4 ms at 8/17/32 against 0.8/1.3/2.4 ms for a
+  draw-only frame of the same window);
+* the array layers are reused the same way (the band's one
+  ``TileTextureService``, content-addressed tile keys, a per-pass upload skip),
+  so a scroll tick uploads only the block that newly entered the range — the
+  rig keeps one allocator across ticks for exactly that reason;
 * a zoom changes the tile size, so every tile is re-planned (~12 ms at 8
   blocks): the interaction budget is a scroll/resize number, a geometry change
   costs a planning pass.
@@ -150,15 +155,17 @@ class _Rig:
     image2: Path
     tile: tuple[int, int]
     cache: object
+    service: object = None
     recording: object = None
 
     def build(self, count: int, *, first_block: int = 0, tile=None):
         tile_w, tile_h = self.tile if tile is None else tile
         # ``cols = count``: the band is ONE row (the timeline's grid), so tile i
-        # of the window lands on block i of the strip. The cache and the
-        # recording are the HOST's, kept across ticks: a scroll tick reuses the
-        # planned tiles of the blocks that stayed visible (StripBandHost does
-        # the same), and a fresh adapter per tick would hide that reuse.
+        # of the window lands on block i of the strip. The cache, the array
+        # allocator and the recording are the HOST's, kept across ticks: a scroll
+        # tick reuses the planned tiles AND the array layers of the blocks that
+        # stayed visible (StripBandHost does the same), and a fresh adapter or
+        # allocator per tick would hide that reuse.
         if self.recording is None:
             # ``varied``: every block carries its OWN frame, as a real
             # recording does. With one shared pair per block the planner's
@@ -167,24 +174,24 @@ class _Rig:
             self.recording = batch.band_recording(
                 self.store, self.image1, self.image2, self.exporter, varied=True
             )
-        return batch.build_band_window(
-            self.store,
-            int(count),
-            int(tile_w),
-            int(tile_h),
-            self.image1,
-            self.image2,
-            self.exporter,
-            cols=int(count),
+        if self.service is None:
+            self.service = _tile_service()
+        return _band_window(
+            self.recording,
+            count=int(count),
             first_block=int(first_block),
+            tile=(int(tile_w), int(tile_h)),
             tile_cache=self.cache,
-            recording=self.recording,
+            tile_service=self.service,
         )
 
     def clear_cache(self) -> None:
         """Drop planned tiles: a fill/zoom case measures a cold planning pass."""
         self.cache.clear()
         self.recording = None
+        # A cold fill is also a cold allocator: no layer of a previous case may
+        # stand in for the upload this case is meant to pay for.
+        self.service = None
 
 
 def _timed(fn):
@@ -531,6 +538,59 @@ def _tile_cache():
     )
 
     return StripTileCache()
+
+
+def _tile_service():
+    """The host's one array allocator (``StripBandHost.array_service``)."""
+    from engine.cache.tile_texture_service import TileTextureService
+    from tabs.image_compare.plugins.video_editor.presenter_parts.strip_band import (
+        STRIP_ARRAY_CAPACITY,
+    )
+
+    return TileTextureService(max_array_size=STRIP_ARRAY_CAPACITY)
+
+
+def _band_window(recording, *, count, first_block, tile, tile_cache, tile_service):
+    """``build_window`` driven with the host's own pieces and ONE allocator.
+
+    The same seam ``bench_strip_batch.build_band_window`` uses — the host's
+    ``render_request``, the host's ``StripRecordingAdapter`` over the exporter's
+    proxy pair, and the layout the timeline would hand the renderer (synthetic
+    here, one row of ``count`` blocks: the bench has no timeline) — plus the one
+    thing that wrapper cannot carry: the rig's ``TileTextureService``. A band
+    owns exactly one for its whole life, so a scroll tick keeps the array layers
+    of the blocks that stayed visible; with a fresh allocator per window the
+    gate would measure the full re-upload this tick must no longer pay.
+    """
+    from tabs.image_compare.plugins.video_editor.presenter_parts.strip_band import (
+        render_request as band_render_request,
+    )
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripBlockLayout,
+        build_window,
+    )
+
+    tile_w, tile_h = (int(value) for value in tile)
+    layout = StripBlockLayout(
+        tile_size=(tile_w, tile_h),
+        fps=FPS,
+        block_count=int(count),
+        cols=int(count),
+    )
+    recording.layout = layout
+    recording.fps = float(layout.fps)
+    recording.block_count = int(layout.block_count)
+    return build_window(
+        recording,
+        int(first_block),
+        int(count),
+        tile_w,
+        tile_h,
+        request=band_render_request(tile_w, tile_h),
+        layout=layout,
+        tile_cache=tile_cache,
+        tile_service=tile_service,
+    )
 
 
 def _strip_tile() -> tuple[int, int]:
