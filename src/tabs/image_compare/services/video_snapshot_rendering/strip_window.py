@@ -15,7 +15,9 @@ This module is that pass as production API:
   instance. Importable and testable offscreen (no QRhi). A caller that passes a
   :class:`StripTileCache` reuses the plan/pixels of blocks that stayed visible
   (one plan builder per recording, not per window) — that is what keeps a
-  scroll tick inside the interaction budget.
+  scroll tick inside the interaction budget. A caller that also passes the
+  band's own ``TileTextureService`` reuses the SLOTS of those blocks, so the
+  pass can skip re-uploading pixels it already has (see ``tile_source_key``).
 * :func:`render_window` — one ``beginPass``/``endPass`` over the window; the
   GPU half lives in ``strip_pass`` and is imported lazily so this module stays
   RHI-free at import time.
@@ -36,6 +38,7 @@ Geometry is single-source: block timing and the tile size come from the
 from __future__ import annotations
 
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -190,7 +193,15 @@ class StripWindow:
     target_w: int
     target_h: int
     tiles: tuple[StripTile, ...] = ()
+    #: The allocator this window's layers came from. The BAND HOST owns it and
+    #: hands the same one to every window, so a block that stayed visible keeps
+    #: its slot (and its uploaded pixels) across a scroll tick.
     tile_service: object | None = None
+    #: Identity of the recording the window's pixels belong to
+    #: (:func:`_recording_token`). Half of every tile's source key: the same
+    #: block at the same tile size in another window of the same recording must
+    #: address the SAME layer, and another recording or another zoom must not.
+    source_scope: object = None
     layer_count: int = 0
     layer_px: int = LAYER_PX
     build_ms: float = 0.0
@@ -221,8 +232,31 @@ class StripWindow:
         return tuple(tile.rect for tile in self.tiles)
 
     def tile_source_key(self, tile: StripTile, side: int):
-        """The allocator key for one tile side (one home, used by the upload)."""
-        return ("strip-window", int(self.generation), int(tile.block), int(side))
+        """The allocator key for one tile side: CONTENT identity, no generation.
+
+        A window generation is a scheduling fact ("a newer window supersedes
+        this one"), never a content identity. The generation used to be in the
+        key, so every scroll tick addressed brand-new slots and re-uploaded
+        every visible tile — measured 2026-11-04 as 5.2/17.4/32.4 ms of render
+        at 8/17/32 blocks against 0.8/1.3/2.4 ms for a draw-only frame of the
+        SAME window. Two windows showing the same block at the same tile size
+        for the same recording therefore name one slot; another recording, or
+        a zoom (new tile size), is a different key by construction.
+
+        A PLACEHOLDER is its own content class, not the frame at that block: a
+        blank cell whose proxy arrives on the next tick must not be skipped as
+        "already uploaded" — that would pin the empty cell over the frame
+        (fail-closed identity, the same rule the placeholder tile exists for).
+        """
+        kind = "strip-placeholder" if tile.is_placeholder else "strip-tile"
+        return (
+            kind,
+            self.source_scope,
+            int(tile.block),
+            int(tile.tile_w),
+            int(tile.tile_h),
+            int(side),
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -375,9 +409,55 @@ class StripTileCache:
 
 
 def _recording_token(recording):
-    """Identity of the recording a plan belongs to (the cache's scope)."""
+    """Identity of the recording a plan belongs to (the cache's scope).
+
+    Never a bare ``id()``: CPython hands a collected object's address to the
+    next allocation, so a reopened recording would inherit the previous one's
+    scope — a stale plan in the tile cache and, worse, a stale ARRAY LAYER in
+    the pass (a cell drawn from another frame's pixels). The same recording
+    object keeps its serial (a scroll tick still reuses its plans and slots),
+    the serial dies with the object, and a new object can never collide with it.
+    """
     token = getattr(recording, "cache_key", None)
-    return id(recording) if token is None else token
+    if token is not None:
+        return token
+    return _recording_serial(recording)
+
+
+#: ``recording -> serial`` for objects with no content ``cache_key`` of their
+#: own. Weak: the serial is only meaningful while its recording is alive.
+_RECORDING_SCOPES: "weakref.WeakKeyDictionary[object, int]" = weakref.WeakKeyDictionary()
+_SCOPE_SERIAL = 0
+
+
+def _recording_serial(recording) -> object:
+    """A per-object serial that cannot be reused after the object dies."""
+    global _SCOPE_SERIAL
+    try:
+        existing = _RECORDING_SCOPES.get(recording)
+        if existing is not None:
+            return existing
+        _SCOPE_SERIAL += 1
+        _RECORDING_SCOPES[recording] = _SCOPE_SERIAL
+        return _SCOPE_SERIAL
+    except TypeError:
+        # No weak support (a SimpleNamespace stand-in, a proxy): fall back to
+        # the address, which is what every caller had before.
+        return id(recording)
+
+
+def recording_scope(recording):
+    """The public identity of a recording (plan cache + array-slot scope).
+
+    Same value :func:`_recording_token` uses for a recording that carries no
+    ``cache_key`` of its own; exposed so an adapter that projects onto the
+    underlying recording (``StripRecordingAdapter.cache_key``) can hand back
+    THIS instead of the object's address. A bare ``id()`` there would defeat
+    the serial exactly where it matters: the adapter is rebuilt per tick, so
+    its key must come from the recording, and a reused address would alias a
+    previous recording's plans and GPU layers.
+    """
+    return _recording_serial(recording)
 
 
 def _request_token(request):
@@ -525,6 +605,7 @@ def build_window(
     cols, rows, target_w, target_h = grid_for(
         count, tile_w, tile_h, resolved.cols_for(count)
     )
+    source_scope = _recording_token(recording)
     window = StripWindow(
         generation=gen,
         first_block=first_block,
@@ -536,13 +617,14 @@ def build_window(
         target_w=target_w,
         target_h=target_h,
         layer_px=int(layer_px),
+        source_scope=source_scope,
     )
     planner = (
         plan_builder
         if plan_builder is not None
         else (tile_cache.planner() if tile_cache is not None else _default_plan_builder())
     )
-    cache_token = _recording_token(recording) if tile_cache is not None else None
+    cache_token = source_scope if tile_cache is not None else None
     request_key = _request_token(request) if tile_cache is not None else None
     tiles: list[StripTile] = []
     for index in range(count):
@@ -639,9 +721,16 @@ def build_window(
     service = _assign_layers(tiles, window, tile_service)
     window.tiles = tuple(tiles)
     window.tile_service = service
-    window.layer_count = _layer_count_for(tiles)
     for tile in tiles:
         tile.layer1, tile.layer2 = _layers_for(tile, service, window)
+    # The array must address every slot the allocator actually handed out, not
+    # just two per tile: a service that still holds a slot outside
+    # ``2 * len(tiles)`` (a shorter window than the previous one, a clamp the
+    # driver forced) would otherwise be drawn at a layer the array does not
+    # have — ``tests/contracts/test_capacity_agreement.py``'s drift, in the
+    # pass instead of at construction.
+    window.layer_count = _layer_count_for(tiles)
+    for tile in tiles:
         tile.uniforms = pack_tile_uniforms(rhi, tile)
         tile.instance = pack_tile_instance(tile, tile.layer1, tile.layer2, layer_px)
         if len(tile.uniforms) != uniform_block_size():
@@ -654,7 +743,96 @@ def build_window(
 
 
 def _layer_count_for(tiles) -> int:
-    return max(2, 2 * len(tiles))
+    """Layers the bound array needs: two per tile, and every slot in use."""
+    wanted = max(2, 2 * len(tiles))
+    for tile in tiles:
+        wanted = max(wanted, int(tile.layer1) + 1, int(tile.layer2) + 1)
+    return wanted
+
+
+#: Keys a caller-owned (shared) ``TileTextureService`` currently holds for a
+#: strip window, per service — weak, because the service dies with the band
+#: host. ``TileTextureService`` deliberately exposes no key enumeration, so
+#: this is how a new window learns which keys left the range and must hand
+#: their layers back. It is keyed by the service OBJECT, so two allocators can
+#: never be confused about each other's slots.
+_STRIP_KEYS: "weakref.WeakKeyDictionary[object, set]" = weakref.WeakKeyDictionary()
+
+
+def _tracked_keys(service) -> set:
+    """``service``'s live key set (a throwaway one when it cannot be weak-keyed)."""
+    try:
+        return _STRIP_KEYS.setdefault(service, set())
+    except TypeError:
+        # A stand-in that is unhashable or refuses weak references: tracking it
+        # is impossible, so nothing is released and every tile re-uploads. That
+        # is the fail-closed direction (a cost, never a wrong cell).
+        return set()
+
+
+def _release_departed(service, wanted: set) -> tuple:
+    """Hand the layers of keys that left the range back to the allocator.
+
+    Must run BEFORE the new window's keys are registered: a jump to a
+    completely different range of 64 blocks would otherwise need both windows'
+    layers at once (256 > the band's 128), open a second texture array and
+    fail the build for a window one array can hold.
+    """
+    tracked = _tracked_keys(service)
+    departed = [key for key in tracked if key not in wanted]
+    if not departed:
+        return ()
+    invalidate = getattr(service, "invalidate_source", None)
+    if not callable(invalidate):
+        return ()
+    for key in departed:
+        invalidate(key)
+        tracked.discard(key)
+    return tuple(departed)
+
+
+def _already_allocated(service, key, size) -> bool:
+    """Whether ``service`` holds this exact key at this exact content size.
+
+    Re-registering a live key would ``reset_source`` it (dropping its residency
+    and freeing its slot), which is exactly the reuse this module is here to
+    keep. A size that disagrees is a content change: treat it as new.
+    """
+    is_resident = getattr(service, "is_resident", None)
+    content_size_for = getattr(service, "content_size_for", None)
+    if not callable(is_resident) or not callable(content_size_for):
+        return False
+    try:
+        if not is_resident(key, (0, 0)):
+            return False
+        return tuple(content_size_for(key, (0, 0)) or ()) == tuple(size)
+    except Exception:
+        return False
+
+
+def _fit_service_capacity(service, want: int) -> None:
+    """Let the allocator hand out ``want`` layers before this window allocates.
+
+    The pass clamps the allocator to the layer count the driver actually
+    accepted (``ArrayResources.set_capacity_sink``), so a band that grew from
+    8 to 17 blocks must raise the ceiling again — otherwise the allocator opens
+    a second texture array for a window one array can hold. Refusals are the
+    service's own business (it never drops a live slot to obey one).
+    """
+    resize = getattr(service, "set_max_array_size", None)
+    if not callable(resize):
+        return
+    # ``TileTextureService`` has no public getter for the ceiling it currently
+    # allows; reading the allocator avoids a pointless shrink-and-regrow cycle
+    # on every window.
+    allocator = getattr(service, "_slot_allocator", None)
+    current = getattr(allocator, "max_array_size", None)
+    try:
+        if current is not None and int(current) >= int(want):
+            return
+        resize(int(want))
+    except (TypeError, ValueError):
+        return
 
 
 def _assign_layers(tiles, window: StripWindow, tile_service):
@@ -664,26 +842,36 @@ def _assign_layers(tiles, window: StripWindow, tile_service):
     ``(0, 0)`` tile resident, read the slot back through ``slot_for`` — the
     allocator owns capacity and free-list reuse, this module assigns no layer
     numbering of its own.
+
+    ``tile_service`` is the band host's one service (``2 * MAX_BLOCKS`` layers):
+    a side whose key is already resident keeps its slot, and keys that left the
+    range are released before anything new is allocated. With no service the
+    window gets a private allocator (CPU-only callers and tests).
     """
     from engine.cache.tile_texture_service import TileTextureService
 
+    shared = tile_service is not None
     service = tile_service
     if service is None:
         service = TileTextureService(max_array_size=_layer_count_for(tiles))
+    wanted = {
+        window.tile_source_key(tile, side)
+        for tile in tiles
+        for side, _image in _tile_sides(tile)
+    }
+    if shared:
+        _release_departed(service, wanted)
+        _fit_service_capacity(service, 2 * len(tiles))
     for tile in tiles:
         for side, image in _tile_sides(tile):
-            service.register_source(
-                window.tile_source_key(tile, side),
-                (int(image.width), int(image.height)),
-            )
-    for tile in tiles:
-        for side, image in _tile_sides(tile):
-            service.mark_resident(
-                window.tile_source_key(tile, side),
-                (0, 0),
-                int(image.width) * int(image.height) * 4,
-                (int(image.width), int(image.height)),
-            )
+            key = window.tile_source_key(tile, side)
+            size = (int(image.width), int(image.height))
+            if _already_allocated(service, key, size):
+                continue
+            service.register_source(key, size)
+            service.mark_resident(key, (0, 0), size[0] * size[1] * 4, size)
+            if shared:
+                _tracked_keys(service).add(key)
     return service
 
 
@@ -705,7 +893,7 @@ def _layers_for(tile: StripTile, service, window: StripWindow):
             raise StripWindowError(
                 f"tile {tile.index} side {side}: allocator opened array "
                 f"{int(slot[0])}; a strip window must fit one texture array "
-                f"({window.layer_count} layers) — give the TileTextureService "
+                f"({len(window.tiles)} tiles) — give the TileTextureService "
                 "at least 2 layers per tile"
             )
         layers.append(int(slot[1]))

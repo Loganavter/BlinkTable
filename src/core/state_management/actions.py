@@ -54,7 +54,6 @@ from core.state_management.session_actions import (
     SetPsnrValueAction,
     SetSsimValueAction,
     SetUnificationInProgressAction,
-    SetZoomInterpolationMethodAction,
 )
 from core.state_management.settings_actions import (
     SetAutoCropBlackBordersAction,

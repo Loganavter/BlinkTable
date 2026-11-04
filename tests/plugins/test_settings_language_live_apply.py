@@ -51,7 +51,6 @@ def _dialog_data(store, *, language: str) -> SettingsDialogData:
         magnifier_interpolation_method="BILINEAR",
         optimize_laser_smoothing=False,
         laser_interpolation_method="BILINEAR",
-        zoom_interpolation_method="BILINEAR",
         magnifier_intersection_highlight_enabled=True,
         magnifier_auto_color_new_instances=True,
         auto_calculate_psnr=False,

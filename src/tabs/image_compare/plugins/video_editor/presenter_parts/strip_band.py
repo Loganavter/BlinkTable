@@ -21,7 +21,11 @@ time and draws nothing. A build that raises is logged and the previous window
 stays live (fail-open — placeholder tiles are the renderer's job, a stale
 frame beats a blank band). Planned tiles outlive a window (``StripTileCache``,
 cleared on a recording change), so a scroll tick plans only the block that
-newly entered the range; a zoom (new tile size) re-plans every tile.
+newly entered the range; a zoom (new tile size) re-plans every tile. The
+band's ONE ``TileTextureService`` outlives a window the same way (dropped on
+release/detach or a content change), so the tiles that stayed visible keep the
+array layers their pixels are already in and only the newly exposed block is
+uploaded.
 
 Geometry single source: :func:`timeline_strip_layout` asks the timeline's own
 ``strip_block_layout`` for the visible blocks (its representative frames and
@@ -40,6 +44,7 @@ from tabs.image_compare.plugins.video_editor.presenter_parts.common import (
     VIDEO_EDITOR_AUTO_CROP,
 )
 from tabs.image_compare.plugins.video_editor.services.strip_recording import (
+    MAX_BLOCKS,
     StripRecordingAdapter,
     proxy_pair_for,
     timeline_strip_layout,
@@ -54,6 +59,12 @@ from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
 from core.log_names import APP_LOGGER_NAME
 
 logger = logging.getLogger(APP_LOGGER_NAME)
+
+#: Layers the band's one array allocator may hand out: two per tile side of a
+#: full window (``MAX_BLOCKS`` blocks). The allocator lives as long as the band,
+#: so a block that stayed visible keeps the layer its pixels are already in and
+#: a scroll tick uploads only what newly entered the range.
+STRIP_ARRAY_CAPACITY = 2 * int(MAX_BLOCKS)
 
 #: Timeline signals that mean "the view the strip draws for changed".
 _VIEW_SIGNALS = ("viewportChanged", "zoomChanged", "viewportChangedState")
@@ -102,6 +113,12 @@ class StripBandHost:
         #: Planned tiles survive a scroll tick (one new block is planned, the
         #: rest are reused); cleared when the recording's content changes.
         self._tile_cache = StripTileCache()
+        #: The band's ONE texture-array allocator: created on first build,
+        #: dropped with the window on release/detach. Keeping it across ticks is
+        #: what lets a scroll tick skip re-uploading the blocks that stayed
+        #: visible — the pass compares the slot a tile draws from, and a fresh
+        #: allocator per window would number every layer from zero again.
+        self._service = None
         #: Diagnostics: window builds, build failures kept fail-open, frames
         #: whose window was rendered, and the last failure text.
         self.build_count = 0
@@ -153,6 +170,7 @@ class StripBandHost:
                 pass
         self._drop_window("host detached")
         self._tile_cache.clear()
+        self._drop_service()
         disable = getattr(timeline, "disable_strip_band", None) if timeline is not None else None
         if callable(disable):
             try:
@@ -179,6 +197,11 @@ class StripBandHost:
         """The recording was cut/undone or the fps changed: new content."""
         self._key = None
         self._tile_cache.clear()
+        # The content behind every tile key just changed while the recording's
+        # identity did not: drop the allocator AND force the pass to re-upload,
+        # or a cut would be painted from the pre-cut pixels (the one failure
+        # class this path must never ship — a cell showing the wrong frame).
+        self._drop_service()
         self._ensure_window("recording change")
 
     def _place(self, band, timeline) -> None:
@@ -237,6 +260,7 @@ class StripBandHost:
                 layout=layout,
                 rhi=self._rhi(),
                 tile_cache=self._tile_cache,
+                tile_service=self.array_service(),
             )
         except Exception as exc:
             # Fail-open: the previous window keeps drawing (a stale strip is a
@@ -258,6 +282,33 @@ class StripBandHost:
     def window_key(self):
         """The ``(recording, first block, count, tile)`` key of the live window."""
         return self._key
+
+    def array_service(self):
+        """The band's one texture-array allocator (created on first need).
+
+        ``STRIP_ARRAY_CAPACITY`` is two layers per tile of a full window, so
+        the allocator can hold one maximal window inside one texture array —
+        the pass binds ``tile_arrays[0]`` only.
+        """
+        if self._service is None:
+            from engine.cache.tile_texture_service import TileTextureService
+
+            self._service = TileTextureService(
+                max_array_size=STRIP_ARRAY_CAPACITY
+            )
+        return self._service
+
+    def _drop_service(self) -> None:
+        """Drop the allocator (and make the pass re-upload) — identity is void."""
+        self._service = None
+        try:
+            from tabs.image_compare.services.video_snapshot_rendering.strip_pass import (
+                forget_uploads,
+            )
+
+            forget_uploads(self._rhi())
+        except Exception:
+            logger.debug("strip upload bookkeeping not dropped", exc_info=True)
 
     def _drop_window(self, reason: str) -> None:
         window = self._window
@@ -308,6 +359,7 @@ class StripBandHost:
             release_window_resources(rhi)
         except Exception:
             logger.debug("strip pass release failed", exc_info=True)
+        self._service = None
         self._drop_window("gpu resources released")
 
     # -- small guards ----------------------------------------------------
@@ -363,4 +415,4 @@ class StripBandHost:
             return None
 
 
-__all__ = ["StripBandHost", "render_request"]
+__all__ = ["STRIP_ARRAY_CAPACITY", "StripBandHost", "render_request"]
