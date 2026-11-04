@@ -122,7 +122,16 @@ def _content_minimum_window_width(dialog) -> int:
     content_width = measure_scroll_pages_stack(pages_stack)[0]
     if content_width <= 0:
         return 0
-    margins = content_layout.contentsMargins()
+    # The padding that surrounds the PAGES, not the column: since the footer
+    # rule spans the column edge to edge (owner request 2026-11-04) the column
+    # itself is flush and the padding lives on the pages' host. Reading the
+    # column here would budget 2x padding less than the pages actually need and
+    # the minimum window width would open a horizontal scrollbar.
+    pages_host = getattr(shell, "pages_host", None)
+    if pages_host is not None and pages_host.layout() is not None:
+        margins = pages_host.layout().contentsMargins()
+    else:
+        margins = content_layout.contentsMargins()
     splitter = getattr(shell, "splitter", None)
     handle_width = int(splitter.handleWidth()) if splitter is not None else 0
     # The viewport is the scroll area minus the column margins and the
