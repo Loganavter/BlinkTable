@@ -726,3 +726,31 @@ def test_the_band_host_owns_one_allocator_and_drops_it_with_the_content():
     assert host.array_service() is not service
     host.detach()
     assert host._service is None
+
+
+def test_the_adapter_scope_is_a_serial_not_an_address():
+    """The band's adapter must project the recording's SERIAL, not ``id()``.
+
+    The adapter is rebuilt on every view change, so its key has to come from
+    the recording it wraps; and the scope now also names array slots in the
+    pass, so an address reused by the next recording would alias another
+    frame's layers. A serial is stable for one recording and never reused.
+    """
+    from tabs.image_compare.plugins.video_editor.services.strip_recording import (
+        StripRecordingAdapter,
+    )
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        recording_scope,
+    )
+
+    class _Plain:
+        fps = 10.0
+
+    first, second = _Plain(), _Plain()
+    adapter_a = StripRecordingAdapter(first, proxy_pair=lambda *_: None)
+    adapter_a_again = StripRecordingAdapter(first, proxy_pair=lambda *_: None)
+    adapter_b = StripRecordingAdapter(second, proxy_pair=lambda *_: None)
+
+    assert adapter_a.cache_key == adapter_a_again.cache_key
+    assert adapter_a.cache_key[0] == recording_scope(first)
+    assert adapter_a.cache_key != adapter_b.cache_key

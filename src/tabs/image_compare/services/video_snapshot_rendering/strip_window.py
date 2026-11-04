@@ -446,6 +446,20 @@ def _recording_serial(recording) -> object:
         return id(recording)
 
 
+def recording_scope(recording):
+    """The public identity of a recording (plan cache + array-slot scope).
+
+    Same value :func:`_recording_token` uses for a recording that carries no
+    ``cache_key`` of its own; exposed so an adapter that projects onto the
+    underlying recording (``StripRecordingAdapter.cache_key``) can hand back
+    THIS instead of the object's address. A bare ``id()`` there would defeat
+    the serial exactly where it matters: the adapter is rebuilt per tick, so
+    its key must come from the recording, and a reused address would alias a
+    previous recording's plans and GPU layers.
+    """
+    return _recording_serial(recording)
+
+
 def _request_token(request):
     """The request fields a plan's geometry depends on (cache key half)."""
     surface = getattr(request, "target_surface", None)
