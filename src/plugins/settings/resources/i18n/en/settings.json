@@ -73,6 +73,7 @@
     "recording_fps": "Recording FPS",
     "video_recording": "Video Recording",
     "magnifier_border_thickness": "Loupe outline thickness (px)",
-    "magnifier_capture_thickness": "Detection area thickness (px)"
+    "magnifier_capture_thickness": "Detection area thickness (px)",
+    "save_button": "Save"
   }
 }
