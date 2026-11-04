@@ -403,7 +403,11 @@ class PreviewCoordinator:
             fit_content=self.fit_content_mode,
             global_bounds=global_bounds,
             fill_color=fill_color_tuple or (0, 0, 0, 0),
-            thumbnail=False,
+            # No ``thumbnail=``: #64 retired the per-frame thumbnail pipeline
+            # and with it the exporter's thumbnail mode. The kwarg outlived the
+            # parameter, so every preview frame died in the worker with
+            # "unexpected keyword argument 'thumbnail'" — invisible to the suite
+            # because every double of this seam takes **kwargs.
         )
 
     def _apply_prepared_preview_scene(
