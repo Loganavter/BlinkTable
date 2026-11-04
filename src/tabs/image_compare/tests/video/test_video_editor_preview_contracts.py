@@ -284,7 +284,10 @@ def test_preview_scene_uses_main_renderer_not_thumbnail(monkeypatch):
             captured["snap"] = snap
             captured["out_w"] = out_w
             captured["out_h"] = out_h
-            captured["thumbnail"] = kwargs.get("thumbnail")
+            # #64 retired the per-frame thumbnail pipeline AND the exporter's
+            # thumbnail mode, so the guarantee is no longer "the flag says
+            # False" — it is that this seam HAS no thumbnail mode to select.
+            captured["kwargs"] = dict(kwargs)
             return SimpleNamespace(plan=object(), store=object())
 
     coordinator.view.preview_label = SimpleNamespace()
@@ -295,7 +298,10 @@ def test_preview_scene_uses_main_renderer_not_thumbnail(monkeypatch):
 
     assert applied is True
     assert captured["applied"] is True
-    assert captured["thumbnail"] is False
+    assert "thumbnail" not in captured["kwargs"], (
+        "the preview must not pass a thumbnail flag: #64 removed the mode from "
+        "the exporter, and a stale kwarg raised TypeError on every frame"
+    )
     assert captured["snap"] is snap
     assert (captured["out_w"], captured["out_h"]) == (640, 360)
 
