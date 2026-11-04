@@ -322,6 +322,7 @@ def _restore_render_config(
                 SetTextAlphaPercentAction,
                 SetTextPlacementModeAction,
             )
+            from core.state_management.session_actions import SetZoomInterpolationMethodAction
 
             actions: list[Any] = []
             # Only dispatch where values differ to avoid noisy history
@@ -364,6 +365,10 @@ def _restore_render_config(
             if movement_changed:
                 actions.append(
                     SetMovementInterpolationMethodAction(method=restored.movement_interpolation_method)
+                )
+            if restored.zoom_interpolation_method != cur.zoom_interpolation_method:
+                actions.append(
+                    SetZoomInterpolationMethodAction(method=restored.zoom_interpolation_method)
                 )
             if restored.include_file_names_in_saved != cur.include_file_names_in_saved:
                 actions.append(

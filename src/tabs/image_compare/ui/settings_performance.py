@@ -24,6 +24,7 @@ from shared.video_policy import FpsPolicy, clamp_fps
 
 INTERACTIVE = group(
     "settings.interactive_optimization",
+    "settings.zoom_interpolation",
     "settings.optimize_magnifier_movement",
     "settings.optimize_laser_smoothing",
     "settings.magnifier_intersection_highlight",
@@ -56,11 +57,25 @@ def _build_interactive_optimization_group(dialog, layout, p):
     dialog.interactive_opt_group = settings_group(dialog, INTERACTIVE)
     rows = []
 
-    # «Zoom Interpolation» is gone from the panel (owner decision 2026-11-04):
-    # live zoom is nearest-neighbour, period — the setting only let a canvas
-    # resample while zoomed and read as a silent downscale/blur. Export keeps
-    # its own high-quality filter (``gpu_export_scene`` overrides the
-    # render-scene value), so nothing user-visible loses quality.
+    row_zoom = QHBoxLayout()
+    row_zoom.setContentsMargins(0, scaled_px(5), 0, scaled_px(5))
+    dialog.lbl_zoom_interp = settings_body_label(
+        INTERACTIVE.text(dialog, "settings.zoom_interpolation"),
+    )
+    INTERACTIVE.tag_member(dialog.lbl_zoom_interp, "settings.zoom_interpolation")
+    dialog.combo_zoom_interp = ComboBox()
+    apply_settings_body(dialog.combo_zoom_interp)
+    INTERACTIVE.tag_combo(dialog.combo_zoom_interp, "settings.zoom_interpolation")
+    dialog.combo_zoom_interp.setMinimumWidth(scaled_px(140))
+    dialog.combo_zoom_interp.setSizePolicy(
+        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+    )
+    row_zoom.addWidget(dialog.lbl_zoom_interp)
+    row_zoom.addWidget(dialog.combo_zoom_interp, 1)
+    row_zoom_widget = as_nav_row(row_zoom)
+    dialog.interactive_opt_group.add_widget(row_zoom_widget)
+    rows.append(row_zoom_widget)
+
     # «Перемещение лупы» is gone from the panel (owner decision 2026-10-26):
     # the interactive-shortcut it toggled stopped being a quality trade once the
     # loupe had one filter (ImageRenderConfigReducer) — it only decided whether
@@ -145,6 +160,12 @@ def _populate_interpolation_combos(dialog, p):
         text = dialog._tr(interp_map.get(key, key), dialog.current_language)
         dialog.combo_mag_interp.addItem(text, key)
         dialog.combo_laser_interp.addItem(text, key)
+    dialog.combo_zoom_interp.addItem(
+        dialog._tr(interp_map["NEAREST"], dialog.current_language), "NEAREST"
+    )
+    dialog.combo_zoom_interp.addItem(
+        dialog._tr(interp_map["BILINEAR"], dialog.current_language), "BILINEAR"
+    )
 
     store_obj = p.store
     if store_obj and hasattr(store_obj, "viewport"):
@@ -164,6 +185,7 @@ def _populate_interpolation_combos(dialog, p):
     for combo, value in (
         (dialog.combo_mag_interp, mag_method),
         (dialog.combo_laser_interp, laser_method),
+        (dialog.combo_zoom_interp, p.zoom_interpolation_method),
     ):
         idx = combo.findData(value)
         if idx != -1:

@@ -152,7 +152,7 @@ def test_settings_tab_owned_labels_are_plain_text(qapp: QApplication):
     """Tab-owned settings pages inherit the migration through the helpers."""
     dialog = _dialog()
     try:
-        for widget in (dialog.lbl_fps,):
+        for widget in (dialog.lbl_zoom_interp, dialog.lbl_fps):
             assert isinstance(widget, Text), type(widget)
             assert not isinstance(widget, Label)
             assert widget.mode() == "plain"

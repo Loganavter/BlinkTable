@@ -131,6 +131,7 @@ class DialogManager:
             movement_interpolation_method=self.host.store.viewport.render_config.interactive_movement_interpolation_method,
             optimize_laser_smoothing=guides_state.smoothing_enabled,
             interpolation_method=self.host.store.viewport.render_config.interpolation_method,
+            zoom_interpolation_method=self.host.store.viewport.render_config.zoom_interpolation_method,
             magnifier_intersection_highlight_enabled=bool(
                 behavior_settings.get("intersection_highlight_enabled", False)
             ),

@@ -22,6 +22,7 @@ from tabs.image_compare.state.reducers import ImageRenderConfigReducer
 def _config(**kw):
     base = dict(
         interpolation_method="LANCZOS",
+        zoom_interpolation_method="BILINEAR",
         movement_interpolation_method="BICUBIC",
         interactive_movement_interpolation_method="BICUBIC",
     )
@@ -36,7 +37,5 @@ def test_setting_the_main_method_moves_the_movement_knobs_with_it():
     assert reduced.interpolation_method == "NEAREST"
     assert reduced.movement_interpolation_method == "NEAREST"
     assert reduced.interactive_movement_interpolation_method == "NEAREST"
-    # Live zoom has no filter knob at all: it is nearest-neighbour by
-    # construction (owner decision 2026-11-04), so there is nothing here that
-    # could stay behind.
-    assert not hasattr(reduced, "zoom_interpolation_method")
+    # the zoom filter is a different gesture and stays independent
+    assert reduced.zoom_interpolation_method == "BILINEAR"

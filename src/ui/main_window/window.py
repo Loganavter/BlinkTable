@@ -394,6 +394,14 @@ class MainWindow(QWidget):
             pass
     def closeEvent(self, event: QCloseEvent):
         logger.debug("Начало закрытия главного окна...")
+        from ui.main_window.project import busy as project_busy
+
+        if project_busy.defer_close_for_project_worker(
+            getattr(self, "project_io", None), event
+        ):
+            # A project open/save worker is still on the pool: accepting the
+            # close would tear the app down under it (see the helper).
+            return
         if getattr(self, "_shutdown_started", False):
             # A second close request while the pipeline is still running must
             # not re-run every shutdown step. It is reachable: the frameless

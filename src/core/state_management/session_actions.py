@@ -29,6 +29,14 @@ class SetPendingUnificationPathsAction(Action):
         return {"paths": self.paths}
 
 @dataclass
+class SetZoomInterpolationMethodAction(Action):
+    method: str
+    type: str = field(default=ActionType.SET_ZOOM_INTERPOLATION_METHOD.value, kw_only=True)
+
+    def get_payload(self):
+        return {"method": self.method}
+
+@dataclass
 class SetAutoCalculatePsnrAction(Action):
     enabled: bool
     type: str = field(default=ActionType.SET_AUTO_CALCULATE_PSNR.value, kw_only=True)

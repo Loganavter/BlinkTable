@@ -39,6 +39,7 @@ from core.state_management.actions import (
     SetTextAlphaPercentAction,
     SetTextPlacementModeAction,
     SetUnificationInProgressAction,
+    SetZoomInterpolationMethodAction,
 )
 from tabs.image_compare.state.models import (
     ImageSessionState,
@@ -500,6 +501,8 @@ class ImageRenderConfigReducer:
             )
         if isinstance(action, SetMovementInterpolationMethodAction):
             return replace(config, movement_interpolation_method=action.method)
+        if isinstance(action, SetZoomInterpolationMethodAction):
+            return replace(config, zoom_interpolation_method=action.method)
         if isinstance(action, SetIncludeFileNamesInSavedAction):
             return replace(config, include_file_names_in_saved=action.enabled)
         if isinstance(action, SetFontSizePercentAction):

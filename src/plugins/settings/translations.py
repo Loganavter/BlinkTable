@@ -66,6 +66,7 @@ def _apply_simple_texts(dialog, lang: str) -> None:
         ("crop_checkbox", "settings.autocrop_black_borders_on_load"),
         ("auto_psnr_checkbox", "settings.autocalculate_psnr"),
         ("auto_ssim_checkbox", "settings.autocalculate_ssim"),
+        ("lbl_zoom_interp", "settings.zoom_interpolation"),
         ("lbl_rhi_backend_hint", "settings.render_backend_restart_hint"),
     ]
     for attr, key in candidates:
@@ -170,11 +171,12 @@ def _rebuild_font_family_combo(dialog, lang: str) -> None:
 def _rebuild_interpolation_combos(dialog, lang: str) -> None:
     if not all(
         hasattr(dialog, name)
-        for name in ("combo_mag_interp", "combo_laser_interp")
+        for name in ("combo_mag_interp", "combo_laser_interp", "combo_zoom_interp")
     ):
         return
     current_mag = dialog.combo_mag_interp.currentData()
     current_laser = dialog.combo_laser_interp.currentData()
+    current_zoom = dialog.combo_zoom_interp.currentData()
 
     dialog.combo_mag_interp.clear()
     dialog.combo_laser_interp.clear()
@@ -183,8 +185,15 @@ def _rebuild_interpolation_combos(dialog, lang: str) -> None:
         dialog.combo_mag_interp.addItem(text, key)
         dialog.combo_laser_interp.addItem(text, key)
 
+    dialog.combo_zoom_interp.clear()
+    for key in ("NEAREST", "BILINEAR"):
+        dialog.combo_zoom_interp.addItem(
+            dialog._tr(_INTERPOLATION_KEY_MAP[key], lang), key
+        )
+
     for combo, value, name in (
         (dialog.combo_mag_interp, current_mag, "combo_mag_interp"),
         (dialog.combo_laser_interp, current_laser, "combo_laser_interp"),
+        (dialog.combo_zoom_interp, current_zoom, "combo_zoom_interp"),
     ):
         _restore_combo_selection(combo, value, name)

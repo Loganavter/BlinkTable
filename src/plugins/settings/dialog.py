@@ -72,6 +72,7 @@ class SettingsDialog(ThemedDialog):
         movement_interpolation_method: str = "BILINEAR",
         optimize_laser_smoothing: bool = False,
         interpolation_method: str = "LANCZOS",
+        zoom_interpolation_method: str = "BILINEAR",
         magnifier_intersection_highlight_enabled: bool = True,
         magnifier_auto_color_new_instances: bool = True,
         auto_calculate_psnr: bool = False,
@@ -107,6 +108,7 @@ class SettingsDialog(ThemedDialog):
             movement_interpolation_method=movement_interpolation_method,
             optimize_laser_smoothing=optimize_laser_smoothing,
             interpolation_method=interpolation_method,
+            zoom_interpolation_method=zoom_interpolation_method,
             magnifier_intersection_highlight_enabled=magnifier_intersection_highlight_enabled,
             magnifier_auto_color_new_instances=magnifier_auto_color_new_instances,
             auto_calculate_psnr=auto_calculate_psnr,
@@ -453,6 +455,9 @@ class SettingsDialog(ThemedDialog):
             ),
             laser_interpolation_method=_val(
                 "combo_laser_interp", "BILINEAR"
+            ) or "BILINEAR",
+            zoom_interpolation_method=_val(
+                "combo_zoom_interp", ctx.zoom_interpolation_method
             ) or "BILINEAR",
             magnifier_intersection_highlight_enabled=_val(
                 "magnifier_intersection_highlight_checkbox",

@@ -40,6 +40,7 @@ def open_project_at_path(owner: "MainWindowProjectIo", path: str) -> None:
     pool = owner._project_thread_pool()
 
     def _apply_loaded(payload) -> None:
+        owner._mark_project_worker_busy(False)
         from services.io.project_io import load_project_data
         from tabs.registry import TabRegistry
 
@@ -72,6 +73,7 @@ def open_project_at_path(owner: "MainWindowProjectIo", path: str) -> None:
             )
 
     def _on_error(err_tuple) -> None:
+        owner._mark_project_worker_busy(False)
         owner._end_project_busy(toast, toast_id, opening, ok=False)
         exc = (
             err_tuple[1]
@@ -117,6 +119,9 @@ def open_project_at_path(owner: "MainWindowProjectIo", path: str) -> None:
     worker = GenericWorker(_worker_task)
     worker.kwargs["progress_callback"] = worker.signals.progress
     owner._project_worker = worker
+    # Same close guard as the save path: an open worker reads and unpacks while
+    # the app would otherwise be tearing its pool down under it.
+    owner._mark_project_worker_busy(True, kind="open")
     worker.signals.progress.connect(
         lambda value: owner._on_project_toast_progress(toast, toast_id, opening, value)
     )

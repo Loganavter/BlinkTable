@@ -18,6 +18,7 @@ class SettingsDialogData:
     magnifier_interpolation_method: str
     optimize_laser_smoothing: bool
     laser_interpolation_method: str
+    zoom_interpolation_method: str
     magnifier_intersection_highlight_enabled: bool
     magnifier_auto_color_new_instances: bool
     auto_calculate_psnr: bool
