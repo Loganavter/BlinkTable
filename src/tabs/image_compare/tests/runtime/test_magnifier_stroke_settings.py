@@ -143,3 +143,37 @@ def test_an_untouched_setting_keeps_the_canvas_style_width():
     rings = resolve_capture_rings(ctx, widget)
 
     assert rings and rings[0].line_width == 2.0
+
+
+def test_the_persist_funnel_writes_both_keys():
+    """The dialog's own save_setting is a host-settings snapshot lambda.
+
+    It never carries a tab-owned key, so the feature's ``settings.persist``
+    command is the funnel that reaches the INI (found live 2026-11-04: the row
+    round-tripped in the dialog and the key never appeared in the profile).
+    """
+    from tabs.image_compare.canvas.features.magnifier.commands.settings import (
+        settings_persist,
+    )
+
+    store = _store(MagnifierModel())
+    settings_set_stroke(store, 5, 8)
+    written: dict = {}
+    settings_persist(store, lambda key, value: written.__setitem__(key, value))
+
+    assert written["magnifier_border_thickness"] == 5
+    assert written["magnifier_capture_thickness"] == 8
+
+
+def test_the_persist_funnel_skips_an_unset_capture_thickness():
+    """``None`` means "keep the canvas style width" — write nothing for it."""
+    from tabs.image_compare.canvas.features.magnifier.commands.settings import (
+        settings_persist,
+    )
+
+    store = _store(MagnifierModel())
+    written: dict = {}
+    settings_persist(store, lambda key, value: written.__setitem__(key, value))
+
+    assert "magnifier_capture_thickness" not in written
+    assert written["magnifier_border_thickness"] == 2

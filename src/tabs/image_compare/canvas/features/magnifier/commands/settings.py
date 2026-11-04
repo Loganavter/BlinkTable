@@ -195,3 +195,17 @@ def settings_persist(store, save_setting) -> None:
             else DEFAULT_MAGNIFIER_SPACING_RELATIVE
         ),
     )
+    # The settings window's two stroke rows (owner request 2026-11-04). They
+    # live on the feature state, so the dialog's own ``_save_setting`` — which
+    # only schedules a snapshot of the HOST settings — never reaches them; this
+    # is the tab's real persistence funnel (``save_image_compare_feature_settings``
+    # -> ``overlay.settings.persist``). A capture thickness of ``None`` means
+    # "keep the canvas style width", so nothing is written for it.
+    _state = get_magnifier_widget_state(view)
+    save_setting(
+        "magnifier_border_thickness", int(_state.default_border_thickness)
+    )
+    if _state.default_capture_thickness is not None:
+        save_setting(
+            "magnifier_capture_thickness", int(_state.default_capture_thickness)
+        )
