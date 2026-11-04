@@ -47,6 +47,31 @@ class CaptureRing:
     alpha: float
 
 
+def _magnifier_capture_thickness(widget) -> int | None:
+    """The user's detection-ring thickness, or ``None`` for the style default.
+
+    Reached the same way the rest of the canvas reaches state from a widget:
+    ``widget.runtime_state._store`` (set by ``CanvasWidget.set_store``). Any
+    failure returns ``None`` — a missing setting must never change a frame.
+    """
+    try:
+        from tabs.image_compare.canvas.features.magnifier.state.feature_state import (
+            get_magnifier_widget_state,
+        )
+
+        state = getattr(widget, "runtime_state", None)
+        store = getattr(state, "_store", None)
+        view_state = getattr(getattr(store, "viewport", None), "view_state", None)
+        if view_state is None:
+            return None
+        value = getattr(
+            get_magnifier_widget_state(view_state), "default_capture_thickness", None
+        )
+        return None if value is None else int(value)
+    except Exception:
+        return None
+
+
 def resolve_capture_circles(ctx, widget) -> tuple:
     """Resolve raw capture circles for this frame from the context (pure).
 
@@ -80,6 +105,13 @@ def resolve_capture_rings(ctx, widget) -> tuple[CaptureRing, ...]:
     nothing is cached, stored, or mutated.
     """
     line_width = float(ctx.resolved_style.annotation_ring_stroke_px)
+    # The owner's detection-area thickness (settings window, 2026-11-04). It
+    # lives on the magnifier feature state because the ring is the loupe's
+    # sampling area; ``None`` keeps the canvas style's own width, so an install
+    # that never touched the row draws exactly what it drew before.
+    override = _magnifier_capture_thickness(widget)
+    if override is not None:
+        line_width = float(max(1.0, int(override)))
     zoom = float(ctx.zoom_level)
     pan_x = float(getattr(ctx, "pan_offset_x", 0.0))
     pan_y = float(getattr(ctx, "pan_offset_y", 0.0))

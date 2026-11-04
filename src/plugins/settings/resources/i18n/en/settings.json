@@ -71,6 +71,8 @@
     "keyboard_group_image_compare": "Image Compare",
     "keyboard_group_multi_compare": "Multi Compare",
     "recording_fps": "Recording FPS",
-    "video_recording": "Video Recording"
+    "video_recording": "Video Recording",
+    "magnifier_border_thickness": "Loupe outline thickness (px)",
+    "magnifier_capture_thickness": "Detection area thickness (px)"
   }
 }

@@ -42,6 +42,61 @@ def settings_set_movement_interpolation(store, method: str) -> bool:
     return True
 
 
+def settings_set_stroke(
+    store, border_thickness=None, capture_thickness=None
+) -> dict:
+    """Set the loupe outline and detection-ring thickness on EVERY instance.
+
+    The owner asked for both in the settings window (2026-11-04). The outline
+    is a per-instance model field (``MagnifierModel.border_thickness``), so a
+    window-level setting writes every live instance and the default new ones are
+    created with; the detection ring has no per-instance field and is drawn from
+    the canvas style, so its value lands on the feature state and the ring
+    resolver reads it (``None`` keeps the style default).
+    """
+    if store is None or getattr(store, "viewport", None) is None:
+        return {}
+    state = get_magnifier_widget_state(store.viewport.view_state)
+    changed: dict = {}
+    border = None if border_thickness is None else max(0, int(border_thickness))
+    capture = None if capture_thickness is None else max(0, int(capture_thickness))
+    if border is not None and int(state.default_border_thickness) != border:
+        state.default_border_thickness = border
+        changed["border_thickness"] = border
+    if capture is not None and state.default_capture_thickness != capture:
+        state.default_capture_thickness = capture
+        changed["capture_thickness"] = capture
+    if border is not None:
+        for model in state.models.values():
+            if model is None:
+                continue
+            if int(getattr(model, "border_thickness", -1)) != border:
+                model.border_thickness = border
+    if changed:
+        if hasattr(store, "invalidate_render_cache"):
+            store.invalidate_render_cache()
+        if hasattr(store, "emit_state_change"):
+            store.emit_state_change()
+    return changed
+
+
+def settings_get_stroke(store) -> dict:
+    """Current loupe outline / detection-ring thickness (capability alias).
+
+    The settings dialog seeds its two rows through this: the UI layer may not
+    import a canvas feature (``test_canvas_features_imports``), so it asks the
+    registry for ``overlay.settings.get_stroke`` instead.
+    """
+    if store is None or getattr(store, "viewport", None) is None:
+        return {}
+    state = get_magnifier_widget_state(store.viewport.view_state)
+    capture = getattr(state, "default_capture_thickness", None)
+    return {
+        "border_thickness": int(getattr(state, "default_border_thickness", 2)),
+        "capture_thickness": 2 if capture is None else int(capture),
+    }
+
+
 def settings_apply_behavior(store, behavior: dict) -> dict:
     state = get_magnifier_widget_state(store.viewport.view_state)
     changes = {}
@@ -77,6 +132,16 @@ def settings_initialize(store, get_setting) -> None:
     view = store.viewport.view_state
     set_default_magnifier_size(view, get_setting("magnifier_size_relative", 0.4, float))
     set_default_capture_size(view, get_setting("capture_size_relative", 0.1, float))
+    # Loupe outline + detection-ring thickness (settings window, 2026-11-04):
+    # the values a session starts with, before any instance exists.
+    state = get_magnifier_widget_state(view)
+    state.default_border_thickness = max(
+        0, int(get_setting("magnifier_border_thickness", 2, int))
+    )
+    stored_capture = get_setting("magnifier_capture_thickness", None, int)
+    state.default_capture_thickness = (
+        None if stored_capture is None else max(0, int(stored_capture))
+    )
     initial_spacing = get_setting(
         "magnifier_spacing_relative", DEFAULT_MAGNIFIER_SPACING_RELATIVE, float
     )

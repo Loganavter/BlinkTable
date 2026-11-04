@@ -71,6 +71,8 @@
     "keyboard_group_image_compare": "Image Compare",
     "keyboard_group_multi_compare": "Multi Compare",
     "recording_fps": "FPS de Gravação",
-    "video_recording": "Gravação de Vídeo"
+    "video_recording": "Gravação de Vídeo",
+    "magnifier_border_thickness": "Espessura do contorno da lupa (px)",
+    "magnifier_capture_thickness": "Espessura da área de detecção (px)"
   }
 }
