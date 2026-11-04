@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QScrollArea, QSizePolicy
+from PySide6.QtWidgets import QFrame, QScrollArea, QSizePolicy
 
 from plugins.settings.layout_geometry import apply_settings_dialog_geometry
 from shared_toolkit.ui.layout_sizing import defer_dialog_geometry
+from sli_ui_toolkit.managers import scaled_px
 from sli_ui_toolkit.ui.managers import connect_ui_metrics
 from sli_ui_toolkit.ui.managers.ui_metrics import AXIS_SCALE
 from sli_ui_toolkit.widgets import (
@@ -52,9 +53,16 @@ def setup_dialog_shell(dialog):
     dialog.pages_stack = dialog.shell.pages_stack
     _install_content_padding_metrics(dialog)
 
+    # Labels describe what the buttons DO here (owner request 2026-11-04): the
+    # primary applies and keeps the window open, so it is Save, not OK; the
+    # secondary just closes, so it is the plain OK. The footer is separated from
+    # the page by a hairline.
+    # Labels describe what the buttons DO here (owner request 2026-11-04): the
+    # primary applies and keeps the window open, so it is Save, not OK; the
+    # secondary just closes, so it is the plain OK.
     dialog.action_bar = DialogActionBar(
+        dialog._tr("settings.save_button", dialog.current_language),
         dialog._tr("common.ok", dialog.current_language),
-        dialog._tr("common.cancel", dialog.current_language),
     )
     dialog.ok_button = dialog.action_bar.primary_button
     dialog.cancel_button = dialog.action_bar.secondary_button
@@ -63,6 +71,21 @@ def setup_dialog_shell(dialog):
     dialog.ok_button.set_defer_click(DEFER_CLICK_AWAIT_RIPPLE)
     dialog.ok_button.clicked.connect(dialog.confirm_settings)
     dialog.cancel_button.clicked.connect(dialog.reject)
+    # A hairline separates the footer from the page content (owner request
+    # 2026-11-04). It lives HERE, not inside DialogActionBar: the export dialog's
+    # bar pins its own height through ``lock_content_minimum_height`` and a
+    # second row inside that widget changes what it settles to
+    # (tests/plugins/test_export_dialog_path_section_height.py caught exactly
+    # that when the separator was first put in the bar).
+    dialog.action_bar_separator = QFrame(dialog)
+    dialog.action_bar_separator.setObjectName("SettingsActionBarSeparator")
+    dialog.action_bar_separator.setFrameShape(QFrame.Shape.HLine)
+    dialog.action_bar_separator.setFrameShadow(QFrame.Shadow.Plain)
+    dialog.action_bar_separator.setFixedHeight(max(1, scaled_px(1)))
+    dialog.action_bar_separator.setSizePolicy(
+        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+    )
+    dialog.content_layout.addWidget(dialog.action_bar_separator)
     dialog.content_layout.addWidget(dialog.action_bar)
 
 def setup_sidebar_items(dialog):

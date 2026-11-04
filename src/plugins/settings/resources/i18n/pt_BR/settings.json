@@ -73,6 +73,7 @@
     "recording_fps": "FPS de Gravação",
     "video_recording": "Gravação de Vídeo",
     "magnifier_border_thickness": "Espessura do contorno da lupa (px)",
-    "magnifier_capture_thickness": "Espessura da área de detecção (px)"
+    "magnifier_capture_thickness": "Espessura da área de detecção (px)",
+    "save_button": "Salvar"
   }
 }

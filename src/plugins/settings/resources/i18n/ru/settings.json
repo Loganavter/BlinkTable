@@ -73,6 +73,7 @@
     "recording_fps": "FPS записи",
     "video_recording": "Запись видео",
     "magnifier_border_thickness": "Толщина обводки лупы (px)",
-    "magnifier_capture_thickness": "Толщина области определения (px)"
+    "magnifier_capture_thickness": "Толщина области определения (px)",
+    "save_button": "Сохранить"
   }
 }
