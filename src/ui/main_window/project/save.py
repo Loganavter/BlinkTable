@@ -75,6 +75,7 @@ def write_project(owner: "MainWindowProjectIo", path: str) -> None:
     pool = owner._project_thread_pool()
 
     def _on_done(missing) -> None:
+        owner._mark_project_worker_busy(False)
         owner.remember_project_path(path)
         owner._end_project_busy(toast, toast_id, saving, ok=True)
         owner._notify_project_saved(path)
@@ -90,6 +91,7 @@ def write_project(owner: "MainWindowProjectIo", path: str) -> None:
             )
 
     def _on_error(err_tuple) -> None:
+        owner._mark_project_worker_busy(False)
         owner._end_project_busy(toast, toast_id, saving, ok=False)
         exc = (
             err_tuple[1]
@@ -145,6 +147,10 @@ def write_project(owner: "MainWindowProjectIo", path: str) -> None:
     worker = GenericWorker(_worker_task)
     worker.kwargs["progress_callback"] = worker.signals.progress
     owner._project_worker = worker
+    # The close path must not tear the app down under a running worker (a pool
+    # clear() does not stop a running runnable); the flag clears on both
+    # outcomes below, so a failed save cannot leave the window unclosable.
+    owner._mark_project_worker_busy(True)
     worker.signals.progress.connect(
         lambda value: owner._on_project_toast_progress(toast, toast_id, saving, value)
     )
