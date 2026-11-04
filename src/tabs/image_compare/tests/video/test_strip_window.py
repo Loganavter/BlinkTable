@@ -421,7 +421,9 @@ def test_framebuffer_rects_tile_a_fractional_target_without_overlap():
 # ---------------------------------------------------------------------------
 
 
-def _window_with_cache(cache, *, first_block=0, count=8, recording=None, tile=_TILE):
+def _window_with_cache(
+    cache, *, first_block=0, count=8, recording=None, tile=_TILE, tile_service=None
+):
     recording = recording if recording is not None else _Recording(blocks=64)
     return build_window(
         recording,
@@ -435,6 +437,7 @@ def _window_with_cache(cache, *, first_block=0, count=8, recording=None, tile=_T
         layout=StripBlockLayout(tile_size=tile, fps=10.0, block_count=count, cols=count),
         plan_builder=_plan_builder,
         tile_cache=cache,
+        tile_service=tile_service,
     )
 
 
@@ -517,3 +520,209 @@ def test_the_cache_keeps_one_plan_builder_per_scope():
     assert cache.planner() is cache.planner()
     cache.clear()
     assert cache.planner() is not None
+
+
+# ---------------------------------------------------------------------------
+# Array-slot reuse: a scroll tick must not re-upload every visible tile
+# ---------------------------------------------------------------------------
+
+
+def _service(capacity: int = 128):
+    """The band host's allocator (one per band, ``2 * MAX_BLOCKS`` layers)."""
+    from engine.cache.tile_texture_service import TileTextureService
+
+    return TileTextureService(max_array_size=int(capacity))
+
+
+def test_the_same_block_at_the_same_tile_size_shares_a_source_key():
+    """Content identity, not window identity: the key a re-upload hangs on.
+
+    With the generation in the key every scroll tick addressed brand-new slots,
+    so the pass had to upload every visible tile again (the measured 5.2/17.4/
+    32.4 ms of a tick against 0.8/1.3/2.4 ms for a draw-only frame).
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    recording = _Recording(blocks=64)
+    first = _window_with_cache(StripTileCache(), first_block=0, recording=recording)
+    scrolled = _window_with_cache(
+        StripTileCache(), first_block=1, recording=recording
+    )
+
+    stayed = first.tile_source_key(first.tiles[1], 1)
+    assert first.tiles[1].block == scrolled.tiles[0].block == 1
+    assert stayed == scrolled.tile_source_key(scrolled.tiles[0], 1)
+    # ... even though they are different windows (a new generation each).
+    assert first.generation != scrolled.generation
+    assert stayed[0] == "strip-tile"
+    assert stayed[1] == first.source_scope == scrolled.source_scope
+    # The two sides of one block and two blocks of one window never collide.
+    assert first.tile_source_key(first.tiles[1], 2) != stayed
+    assert first.tile_source_key(first.tiles[2], 1) != stayed
+
+    # A zoom (new tile size) is a different key by construction.
+    zoomed = _window_with_cache(
+        StripTileCache(), first_block=0, recording=recording, tile=(224, 126)
+    )
+    assert zoomed.tile_source_key(zoomed.tiles[1], 1) != stayed
+    # Another recording never shares a block's key, even at the same geometry.
+    other = _window_with_cache(
+        StripTileCache(), first_block=0, recording=_Recording(blocks=64)
+    )
+    assert other.tile_source_key(other.tiles[1], 1) != stayed
+
+
+def test_a_scroll_tick_reuses_the_slot_of_a_block_that_stayed_visible():
+    """One allocator across windows: unchanged blocks keep their layers."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    service = _service()
+    cache = StripTileCache()
+    recording = _Recording(blocks=64)
+    first = _window_with_cache(
+        cache, first_block=0, recording=recording, tile_service=service
+    )
+    scrolled = _window_with_cache(
+        cache, first_block=1, recording=recording, tile_service=service
+    )
+
+    stayed_before, stayed_after = first.tiles[1], scrolled.tiles[0]
+    assert (stayed_before.block, stayed_after.block) == (1, 1)
+    assert (stayed_before.layer1, stayed_before.layer2) == (
+        stayed_after.layer1,
+        stayed_after.layer2,
+    )
+    assert service.slot_for(scrolled.tile_source_key(stayed_after, 1), (0, 0)) == (
+        0,
+        stayed_after.layer1,
+    )
+
+    # The block that left the range released its layers through the service, so
+    # the allocator can hand them out again instead of opening a second array.
+    departed = first.tile_source_key(first.tiles[0], 1)
+    assert first.tiles[0].block == 0
+    assert service.slot_for(departed, (0, 0)) is None
+    assert service.grid_for(departed) is None
+    assert not service.is_resident(departed, (0, 0))
+
+    # The newly exposed block owns its own layers (never a departed block's).
+    fresh = scrolled.tiles[-1]
+    assert fresh.block == 8
+    assert service.slot_for(scrolled.tile_source_key(fresh, 1), (0, 0)) is not None
+    assert {fresh.layer1, fresh.layer2}.isdisjoint(
+        {stayed_after.layer1, stayed_after.layer2}
+    )
+    # One array, and its capacity addresses every slot in use.
+    layers = [layer for tile in scrolled.tiles for layer in (tile.layer1, tile.layer2)]
+    assert scrolled.layer_count == 2 * scrolled.count
+    assert max(layers) < scrolled.layer_count
+
+
+def test_a_jump_to_a_whole_new_range_stays_inside_one_array():
+    """The departed layers are released BEFORE the new ones are allocated."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    service = _service()
+    recording = _Recording(blocks=200)
+    first = _window_with_cache(
+        StripTileCache(), first_block=0, count=64, recording=recording,
+        tile_service=service,
+    )
+    second = _window_with_cache(
+        StripTileCache(), first_block=100, count=64, recording=recording,
+        tile_service=service,
+    )
+
+    assert first.layer_count == second.layer_count == 128
+    layers = [layer for tile in second.tiles for layer in (tile.layer1, tile.layer2)]
+    assert max(layers) < second.layer_count
+    assert service.slot_for(first.tile_source_key(first.tiles[0], 1), (0, 0)) is None
+
+
+def test_a_placeholder_never_shares_the_key_of_the_frame_it_replaces():
+    """A blank cell must not be "already uploaded" when its proxy arrives.
+
+    The placeholder draws its own flat image; if it owned the block's real key,
+    the pass would skip the upload of the frame that resolves the cell and the
+    strip would keep showing the blank tile.
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        StripTileCache,
+    )
+
+    recording = _Recording(blocks=64, no_source={3})
+    cache = StripTileCache()
+    missing = _window_with_cache(cache, recording=recording)
+    assert missing.tiles[3].is_placeholder
+
+    recording._no_source = set()  # the proxy becomes available on the next tick
+    resolved = _window_with_cache(cache, recording=recording)
+    assert not resolved.tiles[3].is_placeholder
+    assert resolved.tile_source_key(
+        resolved.tiles[3], 1
+    ) != missing.tile_source_key(missing.tiles[3], 1)
+
+
+def test_the_upload_skip_predicate_is_fail_closed():
+    """A skip needs key + layer + content size + allocator to all still match.
+
+    A wrong cell (a tile drawn from another frame's layer) is the worst failure
+    this path can ship; a redundant upload is only a cost. So every uncertainty
+    is an upload.
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_pass import (
+        UploadedSides,
+    )
+
+    uploaded = UploadedSides()
+    service = SimpleNamespace()
+    key = ("strip-tile", 7, 3, 160, 90, 1)
+
+    # An unknown key is never skipped.
+    assert uploaded.needs_upload(key, 4, (160, 90), service) is True
+
+    uploaded.mark_uploaded(key, 4, (160, 90), service)
+    assert uploaded.needs_upload(key, 4, (160, 90), service) is False
+    # The assigned slot changed: the pixels are somewhere else now.
+    assert uploaded.needs_upload(key, 5, (160, 90), service) is True
+    # The content size changed under the same key (a different upload shape).
+    assert uploaded.needs_upload(key, 4, (224, 126), service) is True
+    # A different allocator numbers its layers from zero again.
+    assert uploaded.needs_upload(key, 4, (160, 90), SimpleNamespace()) is True
+    # Another key now owns that layer: it holds THAT key's pixels.
+    borrowed = ("strip-tile", 7, 9, 160, 90, 1)
+    uploaded.mark_uploaded(borrowed, 4, (160, 90), service)
+    assert uploaded.needs_upload(key, 4, (160, 90), service) is True
+    # A cleared map (array rebuilt / released / content changed) uploads all.
+    uploaded.clear()
+    assert uploaded.needs_upload(borrowed, 4, (160, 90), service) is True
+
+
+def test_the_band_host_owns_one_allocator_and_drops_it_with_the_content():
+    """The host's half of the interface: ONE service per band, dropped on change."""
+    from tabs.image_compare.plugins.video_editor.presenter_parts.strip_band import (
+        STRIP_ARRAY_CAPACITY,
+        StripBandHost,
+    )
+    from tabs.image_compare.plugins.video_editor.services.strip_recording import (
+        MAX_BLOCKS,
+    )
+
+    assert STRIP_ARRAY_CAPACITY == 2 * MAX_BLOCKS
+    host = StripBandHost(view=None, editor_service=SimpleNamespace())
+    service = host.array_service()
+    assert host.array_service() is service, "one allocator for the band's life"
+
+    # A cut/undo changes the pixels behind the same tile keys: the allocator and
+    # the pass's upload bookkeeping are dropped so nothing is painted from the
+    # pre-cut frames.
+    host.on_recording_changed()
+    assert host.array_service() is not service
+    host.detach()
+    assert host._service is None
