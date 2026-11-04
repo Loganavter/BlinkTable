@@ -107,6 +107,11 @@ class CanvasRuntimeState:
     # See base_images.update_common_letterbox_geometry.
     _union_letterbox_hold_until: float = 0.0
     _tile_more_pending: bool = False
+    #: One-shot guard for the PIL letterbox refresh scheduled from the resize
+    #: path (render_context._schedule_pil_letterbox_refresh). It was written
+    #: with setattr on this slots dataclass, so every resize raised
+    #: AttributeError and the refresh never ran from that path.
+    _pil_letterbox_refresh_scheduled: bool = False
 
 
 def init_widget_state(widget):
