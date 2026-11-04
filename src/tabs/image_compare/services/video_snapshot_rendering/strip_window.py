@@ -27,6 +27,12 @@ This module is that pass as production API:
 * Placeholder contract — a block whose frame state, source pair or plan is
   missing becomes a placeholder tile of its OWN layer (fail-closed identity:
   a blank cell can never show a neighbour's pixels) and the window records why.
+* Level contract — a :class:`StripLevel` is ``(tile_w, tile_h, dpr)``: the one
+  geometry identity of a planned/resident tile, derived from the layout's own
+  tile size plus the target's device pixel ratio (:func:`level_for_layout`).
+  Plans are cached PER LEVEL and the level the user is about to zoom into can
+  be planned ahead of time (:func:`prepare_level`) so the level-change tick is
+  a cache swap, not a re-plan.
 
 Geometry is single-source: block timing and the tile size come from the
 :class:`StripBlockLayout` the caller passes in (the timeline's own layout), and
@@ -40,7 +46,7 @@ from __future__ import annotations
 import time
 import weakref
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PIL import Image
 
@@ -146,6 +152,152 @@ def resolve_layout(recording, tile_w: int, tile_h: int, layout=None) -> StripBlo
     return layout
 
 
+# ---------------------------------------------------------------------------
+# Levels: the one geometry identity of a planned tile
+# ---------------------------------------------------------------------------
+
+#: A DPR is quantized to 1 / this. A DPR is a display property, not a
+#: measurement: unquantized, the same screen would hand back 1.9999999 and 2.0
+#: and re-plan the whole strip for nothing.
+DPR_QUANTUM = 1000
+#: Levels kept PLANNED per recording. Plans are CPU pixels: a tile carries a
+#: PIL image per side (``2 * tile_w * tile_h * 4`` B), i.e. ~115 KB at 160x90 and
+#: ~295 KB at the 256x144 layer ceiling, so the default 96-tile level is ~11 MB
+#: (~28 MB at the ceiling) and three levels bound the plan cache at ~33-85 MB.
+#: In practice the LRU holds the working set (one window: 8-64 tiles, 1-19 MB);
+#: the capacity is a ceiling for a zoomed-and-panned session, not a steady state.
+#:
+#: Resident GPU layers are NOT kept per level: one level of ``count`` tiles is
+#: ``2 * count`` array layers of ``LAYER_PX**2 * 4`` = 256 KiB each, so a full
+#: 64-block window already fills the band's one 128-layer array
+#: (``STRIP_ARRAY_CAPACITY``) — a second resident level could not be drawn into
+#: that array at all (``tests/contracts/test_capacity_agreement.py``). A newly
+#: entered level's pixels are uploaded by the render that first draws it, and the
+#: previous level's keys are released by ``_release_departed`` in the same window
+#: build — no layer survives a level it does not belong to.
+LEVEL_CACHE_LEVELS = 3
+
+
+@dataclass(frozen=True, slots=True)
+class StripLevel:
+    """One strip tile geometry: ``(tile_w, tile_h, dpr)``.
+
+    The identity every planned tile and every array slot hangs on. It normalizes
+    itself (see ``__post_init__``), so the two fields that decide pixels cannot
+    be compared in more than one spelling; :func:`strip_level` is the named
+    constructor for callers.
+    """
+
+    tile_w: int
+    tile_h: int
+    dpr: float
+
+    def __post_init__(self) -> None:
+        # Normalize in the value itself, not only in the factory: a level is a
+        # dictionary key, and "160x90 @2" vs "@2.0" must never be two buckets
+        # (that would re-plan the strip for a rounding artifact).
+        object.__setattr__(self, "tile_w", max(1, int(self.tile_w)))
+        object.__setattr__(self, "tile_h", max(1, int(self.tile_h)))
+        object.__setattr__(
+            self,
+            "dpr",
+            float(round(max(0.1, float(self.dpr)) * DPR_QUANTUM)) / DPR_QUANTUM,
+        )
+
+    @property
+    def tile_size(self) -> tuple[int, int]:
+        return (int(self.tile_w), int(self.tile_h))
+
+    @property
+    def device_size(self) -> tuple[int, int]:
+        """The plan size this level asks for at its device pixel ratio."""
+        return (
+            max(1, int(round(self.tile_w * self.dpr))),
+            max(1, int(round(self.tile_h * self.dpr))),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "tile": (int(self.tile_w), int(self.tile_h)),
+            "dpr": float(self.dpr),
+        }
+
+
+def strip_level(tile_w: int, tile_h: int, dpr: float = 1.0) -> StripLevel:
+    """The level for a tile size at a device pixel ratio (normalized).
+
+    One entry point, so a caller cannot hold "160x90 @2" and "160x90 @2.0" as
+    two different levels (and re-plan the strip for a rounding artifact).
+    """
+    return StripLevel(tile_w=int(tile_w), tile_h=int(tile_h), dpr=float(dpr))
+
+
+def level_for_layout(layout, dpr: float = 1.0) -> StripLevel:
+    """The level a timeline layout declares at ``dpr`` — the single source.
+
+    The band host must not invent a second tile formula: the timeline's layout
+    already owns the tile size (:func:`resolve_layout` refuses a tile size it
+    does not declare), and the target owns the DPR.
+    """
+    tile_w, tile_h = getattr(layout, "tile_size", DEFAULT_TILE)
+    return strip_level(int(tile_w), int(tile_h), dpr)
+
+
+def next_level(
+    level: StripLevel, *, direction: int = 1, layer_px: int = LAYER_PX
+) -> "StripLevel | None":
+    """The adjacent level one zoom step away, or ``None`` when there is none.
+
+    Up: the sharpest tile of the SAME aspect that still fits one array layer
+    (one tile is uploaded 1:1 into one layer), i.e. the layer ceiling for the
+    current shape. Down: half the tile, floored so a tile stays a thumbnail.
+
+    A level ladder is a geometry rule, not a zoom gesture: the caller decides
+    *when* to move a rung (the band host prepares the next one), this decides
+    *what* the rung is. ``None`` (``LAYER_PX`` already reached, or no smaller
+    rung left) means "no level to prepare" — never a silently equal level.
+    """
+    cap = max(1, int(layer_px))
+    if int(direction) > 0:
+        longest = max(int(level.tile_w), int(level.tile_h))
+        if longest >= cap:
+            return None
+        factor = cap / float(longest)
+        tile_w = max(1, int(round(level.tile_w * factor)))
+        tile_h = max(1, int(round(level.tile_h * factor)))
+        if max(tile_w, tile_h) > cap:
+            tile_w, tile_h = int(level.tile_w), int(level.tile_h)
+        candidate = strip_level(tile_w, tile_h, level.dpr)
+    else:
+        tile_w = max(DEFAULT_TILE[0] // 4, int(level.tile_w) // 2)
+        tile_h = max(DEFAULT_TILE[1] // 4, int(level.tile_h) // 2)
+        candidate = strip_level(tile_w, tile_h, level.dpr)
+    return candidate if candidate != level else None
+
+
+def level_layout(layout, level: StripLevel):
+    """``layout`` retargeted at ``level`` — same block times, new tile size.
+
+    The block ladder (which block shows which frame) belongs to the timeline and
+    never changes with the tile geometry, so a level only replaces the declared
+    tile size. ``resolve_layout`` would refuse the new size (the layout declares
+    the CURRENT level) — that is why preparing/planning another level retargets
+    the layout instead of validating against it.
+    """
+    if layout is None:
+        return None
+    tile_size = (int(level.tile_w), int(level.tile_h))
+    try:
+        if tuple(int(v) for v in layout.tile_size) == tile_size:
+            return layout
+        return replace(layout, tile_size=tile_size)
+    except (AttributeError, TypeError):
+        # A layout stand-in that cannot be retargeted (a dict, a proxy).
+        # ``prepare_level`` then falls back to the fps/block_count the recording
+        # itself declares, instead of inventing a block ladder.
+        return None
+
+
 @dataclass(slots=True)
 class StripTile:
     """Everything the one-pass renderer needs for one strip cell."""
@@ -202,6 +354,10 @@ class StripWindow:
     #: block at the same tile size in another window of the same recording must
     #: address the SAME layer, and another recording or another zoom must not.
     source_scope: object = None
+    #: The geometry identity this window was planned at (see :class:`StripLevel`).
+    #: Two windows of one recording at one level share array slots; another
+    #: level is another key space and (for the pass) another upload.
+    level: "StripLevel | None" = None
     layer_count: int = 0
     layer_px: int = LAYER_PX
     build_ms: float = 0.0
@@ -211,6 +367,14 @@ class StripWindow:
     #: Planned tiles reused from :class:`StripTileCache` / planned this build.
     cache_hits: int = 0
     cache_misses: int = 0
+    #: EVERY tile came out of the level cache, i.e. this window's planning was a
+    #: swap of prepared plans rather than a plan pass. The honest warm/cold bit:
+    #: a level-change tick that reports ``level_warm`` costs packing + the pass;
+    #: a cold one paid the whole plan. Read by the bench and the host's log.
+    level_warm: bool = False
+    #: Set by the band host when this window's level differs from the previous
+    #: window's (the host owns "the previous level"; a bare build cannot know).
+    level_changed: bool = False
 
     @property
     def last_block(self) -> int:
@@ -269,6 +433,9 @@ class StripWindow:
             "placeholders": self.placeholder_reasons,
             "cancelled": self.cancelled,
             "cache": {"hits": int(self.cache_hits), "misses": int(self.cache_misses)},
+            "level": self.level.to_dict() if self.level is not None else None,
+            "level_warm": bool(self.level_warm),
+            "level_changed": bool(self.level_changed),
         }
 
 
@@ -339,41 +506,57 @@ def _default_plan_builder():
 
 
 class StripTileCache:
-    """Planned strip tiles kept across windows (LRU, one recording scope).
+    """Planned strip tiles kept across windows, PER LEVEL (LRU, one scope).
 
     A scroll tick moves the visible range by a block or two, so all but the
     newly exposed blocks are the same frames planned for the same tile size:
     planning them again is the interaction budget's whole cost (a window build
     is 16-25 ms of CPU, and 14 spill-mmap flushes were 24 ms of it before
-    2026-11-04). Reusing the planned tile — plan, PIL pixels, canvas size —
-    turns that tick into one plan plus one render.
+    2026-11-04). A ZOOM changes the level, so every tile of the new level is a
+    fresh plan (~15 ms of a 17.3 ms tick at 8 blocks) — unless that level was
+    planned ahead (:func:`prepare_level`), which is what this level split is
+    for: the level-change tick then reads its plans out of its own bucket and
+    pays only packing + the pass.
 
     Scope and invalidation: the cache belongs to ONE recording (the caller
-    clears it when the recording is cut/undone) and keys a tile by
-    ``(block, tile_w, tile_h, request token)``, so a zoom (new tile size) is a
-    miss by construction and a re-zoom to a seen size is a hit. Placeholder
-    tiles are never cached: a missing proxy or a failed plan is transient, and
-    caching it would pin a blank cell over a frame that arrives later.
+    clears it when the recording is cut/undone). Inside that scope a tile is
+    keyed by ``(level, block, request token)``: plans for two levels never mix,
+    a re-zoom to a seen level is a hit, and a cut cannot survive the scope.
 
-    Bounded: ``capacity`` planned tiles (default 96 = 48 blocks at two sides,
-    ~5 MB of 160x90 pixels), LRU beyond it. The memory is the plan's stores,
-    so the cap matters.
+    Bounded twice: ``capacity`` planned tiles PER LEVEL (default 96 = a full
+    64-block window plus overscan) and ``max_levels`` levels (default 3, see
+    ``LEVEL_CACHE_LEVELS`` for the memory arithmetic). LRU on both axes: the
+    oldest level goes first, then the oldest tile of a level. Placeholder tiles
+    are never cached: a missing proxy or a failed plan is transient, and caching
+    it would pin a blank cell over a frame that arrives later.
     """
 
-    def __init__(self, capacity: int = 96, plan_builder=None) -> None:
+    def __init__(
+        self,
+        capacity: int = 96,
+        plan_builder=None,
+        max_levels: int = LEVEL_CACHE_LEVELS,
+    ) -> None:
         self._capacity = max(1, int(capacity))
+        self._max_levels = max(1, int(max_levels))
         self._token: object = None
-        self._entries: OrderedDict = OrderedDict()
+        #: level -> OrderedDict(key -> StripTile), LRU order (oldest first) on
+        #: both the level map and each level's tiles.
+        self._entries: "OrderedDict[StripLevel, OrderedDict]" = OrderedDict()
         #: The plan builder this scope plans with. It MUST outlive a window:
         #: ``SnapshotFrameRenderer`` owns ``FrameRenderCaches``, and a fresh
         #: renderer per window pays the cold proxy/prescale/plan-cache cost on
         #: its first tile — measured 2026-11-04 at ~13 ms of a tick that planned
         #: a single new block. One builder per recording is what the export path
-        #: already does.
+        #: already does — and one per SCOPE, not per level: the renderer's caches
+        #: are level-independent.
         self._plan_builder = plan_builder
         #: Diagnostics for the window's ``to_dict`` and the latency bench.
         self.hits = 0
         self.misses = 0
+        #: How many plans ``prepare_level`` stored (a cache fill is not a hit:
+        #: the tick that reads it is).
+        self.prepared = 0
 
     def planner(self):
         """The plan builder for this scope (created on first use)."""
@@ -390,22 +573,53 @@ class StripTileCache:
             self._entries.clear()
             self._token = token
 
-    def get(self, token, key):
+    def levels(self) -> tuple:
+        """The levels currently planned, oldest first (LRU order)."""
+        return tuple(self._entries)
+
+    def level_tiles(self, level: StripLevel) -> int:
+        """Planned tiles held for ``level`` (0 when the level is not cached)."""
+        return len(self._entries.get(level, ()))
+
+    def has_level(self, level: StripLevel) -> bool:
+        return level in self._entries
+
+    def _bucket(self, level: StripLevel) -> OrderedDict:
+        bucket = self._entries.get(level)
+        if bucket is None:
+            bucket = OrderedDict()
+            self._entries[level] = bucket
+            # Level LRU: a level is a whole window of plans, so the cap is a
+            # handful of levels, not a handful of tiles.
+            while len(self._entries) > self._max_levels:
+                self._entries.popitem(last=False)
+        else:
+            self._entries.move_to_end(level)
+        return self._entries[level]
+
+    def get(self, token, level: StripLevel, key):
         self._scope(token)
-        entry = self._entries.get(key)
+        bucket = self._entries.get(level)
+        entry = None if bucket is None else bucket.get(key)
         if entry is None:
             self.misses += 1
             return None
-        self._entries.move_to_end(key)
+        self._entries.move_to_end(level)
+        bucket.move_to_end(key)
         self.hits += 1
         return entry
 
-    def put(self, token, key, tile: "StripTile") -> None:
+    def put(self, token, level: StripLevel, key, tile: "StripTile") -> None:
         self._scope(token)
-        self._entries[key] = tile
-        self._entries.move_to_end(key)
-        while len(self._entries) > self._capacity:
-            self._entries.popitem(last=False)
+        bucket = self._bucket(level)
+        bucket[key] = tile
+        bucket.move_to_end(key)
+        while len(bucket) > self._capacity:
+            bucket.popitem(last=False)
+
+    def drop_level(self, level: StripLevel) -> bool:
+        """Forget one level's plans (a range left it / the level was retired)."""
+        return self._entries.pop(level, None) is not None
 
 
 def _recording_token(recording):
@@ -554,6 +768,67 @@ def _placeholder_tile(
     )
 
 
+def _plan_tile(
+    recording,
+    block: int,
+    timestamp: float,
+    rect,
+    tile_w: int,
+    tile_h: int,
+    request,
+    planner,
+) -> StripTile:
+    """One block planned (or its own fail-closed placeholder tile).
+
+    The single planning path: ``build_window`` and :func:`prepare_level` both
+    go through here, so a prepared level and a live one can never disagree about
+    what a tile is (same resolver, same plan builder, same placeholder rules).
+    """
+    snapshot, reason = None, ""
+    try:
+        snapshot = recording.evaluate_at(timestamp)
+    except Exception as exc:
+        reason = f"evaluate_at failed: {exc}"
+    if not reason and snapshot is None:
+        reason = "no frame state"
+    pair, pair_reason = (None, reason) if reason else _pair_from(
+        recording, snapshot, (tile_w, tile_h)
+    )
+    if pair is None:
+        return _placeholder_tile(
+            0, block, timestamp, rect, tile_w, tile_h,
+            pair_reason or reason or "no source",
+        )
+    image1, image2 = pair
+    plan = None
+    try:
+        prepared = planner(snapshot, request, image1, image2)
+        plan = getattr(prepared, "plan", prepared)
+    except Exception as exc:
+        return _placeholder_tile(
+            0, block, timestamp, rect, tile_w, tile_h, f"plan failed: {exc}"
+        )
+    plan_image1 = _pil_image(getattr(plan, "image1", image1))
+    plan_image2 = _pil_image(getattr(plan, "image2", image2))
+    if plan_image1 is None or plan_image2 is None:
+        return _placeholder_tile(
+            0, block, timestamp, rect, tile_w, tile_h, "plan carries no pixels"
+        )
+    return StripTile(
+        index=0,
+        block=block,
+        timestamp=timestamp,
+        rect=rect,
+        plan=plan,
+        image1=plan_image1,
+        image2=plan_image2,
+        canvas_w=int(getattr(plan, "canvas_w", 0) or tile_w),
+        canvas_h=int(getattr(plan, "canvas_h", 0) or tile_h),
+        tile_w=tile_w,
+        tile_h=tile_h,
+    )
+
+
 def build_window(
     recording,
     first_block: int,
@@ -569,6 +844,7 @@ def build_window(
     generation: int | None = None,
     layer_px: int = LAYER_PX,
     tile_cache: "StripTileCache | None" = None,
+    dpr: float = 1.0,
 ) -> StripWindow:
     """Plan + pack ``count`` visible blocks starting at ``first_block``.
 
@@ -577,6 +853,11 @@ def build_window(
     ``fps`` / ``block_count``. ``request`` is the same ``VideoRenderRequest``
     the export/thumbnail path builds per tile. ``rhi`` only feeds the uniform
     packer's clip-space correction; ``None`` is the identity used by CPU tests.
+
+    ``dpr`` is the target's device pixel ratio: with the tile size it forms the
+    :class:`StripLevel` this window is planned at. A level whose plans are
+    already in ``tile_cache`` (because :func:`prepare_level` planned it ahead)
+    makes this build a swap — ``window.level_warm`` says so.
 
     The returned window is the live one: building another supersedes it, and
     :func:`render_window` refuses to apply a superseded/cancelled window.
@@ -596,6 +877,7 @@ def build_window(
             "(one tile is uploaded 1:1 into one layer)"
         )
     resolved = resolve_layout(recording, tile_w, tile_h, layout)
+    level = strip_level(tile_w, tile_h, dpr)
     gen = next_generation() if generation is None else int(generation)
     if generation is not None:
         # An explicit generation must not rewind the module counter (a later
@@ -618,6 +900,7 @@ def build_window(
         target_h=target_h,
         layer_px=int(layer_px),
         source_scope=source_scope,
+        level=level,
     )
     planner = (
         plan_builder
@@ -631,92 +914,27 @@ def build_window(
         block = first_block + index
         timestamp = float(resolved.block_time(block))
         rect = tile_rect(index, cols, tile_w, tile_h)
-        cache_key = (
-            (int(block), int(tile_w), int(tile_h), request_key)
-            if tile_cache is not None
-            else None
-        )
+        cache_key = (int(block), request_key) if tile_cache is not None else None
         if tile_cache is not None:
-            cached = tile_cache.get(cache_token, cache_key)
+            cached = tile_cache.get(cache_token, level, cache_key)
             if cached is not None:
                 window.cache_hits += 1
                 tiles.append(_reposition(cached, index, block, timestamp, rect))
                 continue
         window.cache_misses += 1
-        snapshot, reason = None, ""
-        try:
-            snapshot = recording.evaluate_at(timestamp)
-        except Exception as exc:
-            reason = f"evaluate_at failed: {exc}"
-        if not reason and snapshot is None:
-            reason = "no frame state"
-        pair, pair_reason = (None, reason) if reason else _pair_from(
-            recording, snapshot, (tile_w, tile_h)
+        tile = _plan_tile(
+            recording, block, timestamp, rect, tile_w, tile_h, request, planner
         )
-        if pair is None:
-            tiles.append(
-                _placeholder_tile(
-                    index,
-                    block,
-                    timestamp,
-                    rect,
-                    tile_w,
-                    tile_h,
-                    pair_reason or reason or "no source",
-                )
-            )
-            continue
-        image1, image2 = pair
-        plan = None
-        try:
-            prepared = planner(snapshot, request, image1, image2)
-            plan = getattr(prepared, "plan", prepared)
-        except Exception as exc:
-            tiles.append(
-                _placeholder_tile(
-                    index,
-                    block,
-                    timestamp,
-                    rect,
-                    tile_w,
-                    tile_h,
-                    f"plan failed: {exc}",
-                )
-            )
-            continue
-        plan_image1 = _pil_image(getattr(plan, "image1", image1))
-        plan_image2 = _pil_image(getattr(plan, "image2", image2))
-        if plan_image1 is None or plan_image2 is None:
-            tiles.append(
-                _placeholder_tile(
-                    index,
-                    block,
-                    timestamp,
-                    rect,
-                    tile_w,
-                    tile_h,
-                    "plan carries no pixels",
-                )
-            )
-            continue
-        tile = StripTile(
-            index=index,
-            block=block,
-            timestamp=timestamp,
-            rect=rect,
-            plan=plan,
-            image1=plan_image1,
-            image2=plan_image2,
-            canvas_w=int(getattr(plan, "canvas_w", 0) or tile_w),
-            canvas_h=int(getattr(plan, "canvas_h", 0) or tile_h),
-            tile_w=tile_w,
-            tile_h=tile_h,
-        )
+        tile.index = index
         tiles.append(tile)
-        if tile_cache is not None:
+        if tile_cache is not None and not tile.is_placeholder:
             # Only a real frame is cacheable: a placeholder means "the proxy or
             # the plan was not ready", which the next tick may resolve.
-            tile_cache.put(cache_token, cache_key, tile)
+            tile_cache.put(cache_token, level, cache_key, tile)
+
+    # Warm = every tile was already planned at this level. A cold window (or a
+    # scroll tick that exposed a block) planned something, and says so.
+    window.level_warm = bool(tiles) and window.cache_misses == 0
 
     service = _assign_layers(tiles, window, tile_service)
     window.tiles = tuple(tiles)
@@ -740,6 +958,144 @@ def build_window(
             )
     window.build_ms = (time.perf_counter() - started) * 1000.0
     return _adopt(window)
+
+
+# ---------------------------------------------------------------------------
+# Pre-render: plan the next level's tiles into the cache, never into a window
+# ---------------------------------------------------------------------------
+
+#: How long ONE preparation slice may run, in ms. A preparation slice is a
+#: cache fill on the FILL side of the budget, never on an interaction tick — the
+#: band host only starts one when a level is first planned (a cold window), and a
+#: fill has 50 ms against a measured 4.4/11.7/19.4 ms. Bounded so that a 32-block
+#: window at a larger level cannot turn a 19 ms fill into a 100 ms one; whatever
+#: did not fit says ``stopped="budget"`` and the next level entry resumes from
+#: the tiles the cache already holds.
+LEVEL_PREPARE_BUDGET_MS = 20.0
+
+
+@dataclass(slots=True)
+class LevelPreparation:
+    """What one :func:`prepare_level` call planned (diagnostics, not a window)."""
+
+    level: "StripLevel"
+    blocks: int = 0
+    planned: int = 0
+    reused: int = 0
+    placeholders: int = 0
+    #: Tiles the slice looked at (planned + reused + placeholder) — the resume
+    #: offset of a budget-limited fill.
+    examined: int = 0
+    #: Why the fill stopped early: ``""`` (done), ``"budget"``, ``"interrupted"``
+    #: (the caller's token moved: a newer level / a recording change / detach).
+    stopped: str = ""
+    build_ms: float = 0.0
+
+    @property
+    def complete(self) -> bool:
+        return self.stopped == ""
+
+    def to_dict(self) -> dict:
+        return {
+            "level": self.level.to_dict(),
+            "blocks": int(self.blocks),
+            "planned": int(self.planned),
+            "reused": int(self.reused),
+            "placeholders": int(self.placeholders),
+            "examined": int(self.examined),
+            "stopped": self.stopped,
+            "ms": round(float(self.build_ms), 2),
+        }
+
+
+def prepare_level(
+    recording,
+    level: "StripLevel",
+    first_block: int,
+    count: int,
+    *,
+    request,
+    layout=None,
+    plan_builder=None,
+    tile_cache: "StripTileCache",
+    budget_ms: float | None = LEVEL_PREPARE_BUDGET_MS,
+    should_continue=None,
+) -> LevelPreparation:
+    """Plan ``count`` blocks at ``level`` into ``tile_cache``. NOT the frame path.
+
+    The contract, and why this exists: a level change currently re-plans every
+    visible tile (measured 15.0 ms of a 17.3 ms zoom tick at 8 blocks). This
+    fills the LEVEL CACHE for the level the user is about to zoom into, so that
+    tick becomes a swap (``window.level_warm``) instead of a plan pass.
+
+    "Not on the frame path" means exactly:
+
+    * it is called from a view-change handler, NEVER from ``render`` (the band
+      host's ``_render`` gets its window from ``_ensure_window(prepare=False)``);
+    * it never builds or adopts a window — ``live_window()`` and the visible
+      window's generation are untouched, nothing is cancelled, ``applied`` stays
+      false, and no render target/RHI/command buffer is involved at all;
+    * it never touches a ``TileTextureService``: no layer is registered and no
+      key is released, so the visible level's array slots cannot move;
+    * it is a bounded cache fill (``budget_ms``) that stops the moment the
+      caller's token moves (``should_continue`` → False), i.e. a newer level or
+      a recording change abandons it — latest-wins, no timers, no workers.
+
+    A placeholder is not cached (same rule as a live window): a missing proxy at
+    the prepared level must not pin a blank cell for the frame that arrives
+    later. The next call re-plans it.
+    """
+    started = time.perf_counter()
+    tile_w, tile_h = int(level.tile_w), int(level.tile_h)
+    first_block = int(first_block)
+    count = int(count)
+    report = LevelPreparation(level=level, blocks=count)
+    if count <= 0:
+        report.stopped = "budget"
+        return report
+    target_layout = level_layout(
+        layout if layout is not None else getattr(recording, "layout", None), level
+    )
+    if target_layout is None:
+        # The block ladder is the timeline's; without it this is not a plan this
+        # path may invent (``block_time`` would be a second formula).
+        target_layout = StripBlockLayout(
+            tile_size=(tile_w, tile_h),
+            fps=float(getattr(recording, "fps", 10.0) or 10.0),
+            block_count=int(getattr(recording, "block_count", 0) or 0),
+        )
+    planner = plan_builder if plan_builder is not None else tile_cache.planner()
+    token = _recording_token(recording)
+    request_key = _request_token(request)
+    for index in range(count):
+        if should_continue is not None and not should_continue():
+            report.stopped = "interrupted"
+            break
+        if (
+            budget_ms is not None
+            and (time.perf_counter() - started) * 1000.0 >= float(budget_ms)
+        ):
+            report.stopped = "budget"
+            break
+        block = first_block + index
+        report.examined += 1
+        key = (int(block), request_key)
+        if tile_cache.get(token, level, key) is not None:
+            report.reused += 1
+            continue
+        timestamp = float(target_layout.block_time(block))
+        rect = (0, 0, tile_w, tile_h)
+        tile = _plan_tile(
+            recording, block, timestamp, rect, tile_w, tile_h, request, planner
+        )
+        if tile.is_placeholder:
+            report.placeholders += 1
+            continue
+        tile_cache.put(token, level, key, tile)
+        tile_cache.prepared += 1
+        report.planned += 1
+    report.build_ms = (time.perf_counter() - started) * 1000.0
+    return report
 
 
 def _layer_count_for(tiles) -> int:
@@ -1239,10 +1595,16 @@ def render_window(
 
 __all__ = [
     "DEFAULT_TILE",
+    "DPR_QUANTUM",
     "LAYER_PX",
+    "LEVEL_CACHE_LEVELS",
+    "LEVEL_PREPARE_BUDGET_MS",
     "PLACEHOLDER_RGBA",
+    "LevelPreparation",
     "StripBlockLayout",
+    "StripLevel",
     "StripTile",
+    "StripTileCache",
     "StripWindow",
     "StripWindowCancelled",
     "StripWindowError",
@@ -1253,13 +1615,19 @@ __all__ = [
     "divider_spec_for_tile",
     "grid_for",
     "is_current",
+    "level_for_layout",
+    "level_layout",
     "live_window",
     "next_generation",
+    "next_level",
     "pack_tile_divider",
     "pack_tile_instance",
     "pack_tile_uniforms",
+    "prepare_level",
+    "recording_scope",
     "render_window",
     "resolve_layout",
+    "strip_level",
     "tile_rect",
     "uniform_block_size",
     "wants_divider",

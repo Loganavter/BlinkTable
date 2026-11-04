@@ -136,6 +136,10 @@ class _Harness:
         return SimpleNamespace(timeline=self.widget)
 
     def host(self, **kwargs):
+        # The adjacent-level cache fill uses the same stand-in planner as the
+        # window (the production host leaves it to the level cache's planner);
+        # a test that counts planner calls injects its own instead.
+        kwargs.setdefault("prepare_plan_builder", _plain_plan_builder)
         return StripBandHost(
             view=self.view(),
             editor_service=self.editor,
@@ -292,7 +296,13 @@ def test_strip_tile_fits_one_array_layer():
 
 
 def test_band_proxy_is_requested_at_the_thumbnail_size(qapp):
-    """The exporter seam gets the thumbnail size — the pyramid pick, not a cell."""
+    """The exporter seam gets the thumbnail size — the pyramid pick, not a cell.
+
+    The live window's tiles ask at the current LEVEL's size (the filmstrip
+    thumbnail at the target DPR). The host's ahead-of-time cache fill asks at the
+    NEXT level's size — that is the point of preparing it — and nothing ever asks
+    for the block cell's own aspect (the phase-2 sliver).
+    """
     harness = _Harness(qapp)
     host = harness.host(builder=_recording_builder)
     try:
@@ -300,9 +310,21 @@ def test_band_proxy_is_requested_at_the_thumbnail_size(qapp):
         window = host.window()
         assert window is not None
 
-        assert harness.exporter.calls, "the window must resolve its pixel pair"
-        for _snap, auto_crop, target_size in harness.exporter.calls:
-            assert target_size == THUMBNAIL_TARGET_SIZE
+        asked = {tuple(size) for _snap, _auto_crop, size in harness.exporter.calls}
+        assert window.level.tile_size == THUMBNAIL_TARGET_SIZE
+        assert THUMBNAIL_TARGET_SIZE in asked
+        declared = {tuple(window.level.tile_size)}
+        prepared = host.last_preparation
+        if prepared is not None:
+            declared.add(tuple(prepared.level.tile_size))
+        assert asked <= declared, "a tile asked for a size no level declares"
+        # The block cell is NOT the tile: at the fitted view the cell is 128x72.
+        cell = (
+            int(round(timeline_viewport.get_base_tile_width(harness.widget))),
+            int(harness.widget.STRIP_HEIGHT),
+        )
+        assert cell not in asked
+        for _snap, auto_crop, _size in harness.exporter.calls:
             assert auto_crop is False
     finally:
         host.detach()
@@ -661,3 +683,221 @@ def test_no_timer_settle_or_sleep_in_the_strip_path():
         source = Path(inspect.getsourcefile(module)).read_text(encoding="utf-8")
         for token in forbidden:
             assert token not in source, f"{module.__name__} uses {token}"
+
+
+# ---------------------------------------------------------------------------
+# Levels: the host prepares the next one, and the render tick never plans
+# ---------------------------------------------------------------------------
+
+
+def test_the_host_prepares_the_adjacent_level_for_the_next_zoom(qapp):
+    """The fill starts from a view change, once the level was first planned."""
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        next_level,
+    )
+
+    harness = _Harness(qapp)
+    host = harness.host(builder=_recording_builder)
+    try:
+        host.attach()
+        window = host.window()
+        assert window is not None
+        prepared = host.last_preparation
+        assert prepared is not None, "a level's first plan must prepare the next"
+        assert prepared.level == next_level(window.level)
+        assert prepared.complete
+        assert prepared.planned == window.count
+        assert (
+            host._tile_cache.level_tiles(prepared.level) == window.count
+        ), "the prepared level's plans must live in the level cache"
+        # The visible window is untouched by the fill.
+        assert host.window() is window
+        assert window.level_warm is False
+    finally:
+        host.detach()
+        harness.close()
+
+
+def test_the_render_tick_never_prepares_a_level(qapp, monkeypatch):
+    """`_render` is the frame path: it must not plan another level, ever.
+
+    The discriminator is a preparing method that refuses to be called: if the
+    render tick ever reached it, this test fails with its own message instead of
+    a timing number.
+    """
+    harness = _Harness(qapp)
+    host = harness.host(builder=_recording_builder)
+    drawn: list = []
+
+    def _fake_render(target, window, *, rhi, command_buffer=None, **_kwargs):
+        drawn.append(window)
+
+    def _boom(**_kwargs):
+        raise AssertionError("_render planned another level on the frame path")
+
+    monkeypatch.setattr(strip_band_module, "render_window", _fake_render)
+    try:
+        host.attach()
+        # attach() legitimately prepares the next level; from here on the
+        # frame path must never reach it again.
+        monkeypatch.setattr(host, "prepare_adjacent_level", _boom)
+        band = harness.widget.strip_band()
+        monkeypatch.setattr(band, "renderTarget", lambda: object())
+        monkeypatch.setattr(band, "rhi", lambda: object())
+
+        host._render("cb", band)
+        host._render("cb", band)
+
+        assert len(drawn) == 2
+        assert host.render_count == 2
+    finally:
+        host.detach()
+        harness.close()
+
+
+def test_a_host_level_change_takes_the_prepared_level(qapp, monkeypatch):
+    """Zoom into the prepared level: a swap, no planner call, logged warm.
+
+    The production tile is pinned to the filmstrip thumbnail, so this drives the
+    OTHER axis of a level — the target DPR — and makes the prepared rung the
+    level the host moves into. What is pinned: the host re-reads the level on the
+    view change, finds every tile planned, and reports ``warm``.
+    """
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        strip_level,
+    )
+
+    harness = _Harness(qapp)
+    host = harness.host(builder=_recording_builder)
+    calls: list = []
+
+    def counting(snapshot, request, image1, image2):
+        # ``snapshot`` is the harness recording's frame state (timestamp only).
+        calls.append(snapshot.timestamp)
+        return _plain_plan_builder(snapshot, request, image1, image2)
+
+    next_zoom = strip_level(*THUMBNAIL_TARGET_SIZE, 2.0)
+    monkeypatch.setattr(host, "_dpr", lambda: 1.0)
+    host._prepare_plan_builder = counting
+    monkeypatch.setattr(
+        strip_band_module, "next_level", lambda _level, **_kwargs: next_zoom
+    )
+    try:
+        host.attach()
+        window = host.window()
+        assert window is not None
+        prepared = host.last_preparation
+        assert prepared is not None and prepared.level == next_zoom
+        assert len(calls) == window.count, "the fill plans every visible tile"
+        calls.clear()
+
+        # The user zooms: the target DPR changes, i.e. a new level.
+        monkeypatch.setattr(host, "_dpr", lambda: 2.0)
+        host.on_view_changed()
+
+        zoomed = host.window()
+        assert zoomed.level == next_zoom
+        assert calls == [], "a prepared level change must not call the planner"
+        assert zoomed.level_warm is True
+        assert zoomed.level_changed is True
+        assert host.level_changes == 1
+        assert host.warm_level_changes == 1
+        assert host.cold_level_changes == 0
+        assert zoomed.to_dict()["level_warm"] is True
+    finally:
+        host.detach()
+        harness.close()
+
+
+def test_a_level_change_without_a_prepared_level_is_logged_cold(qapp, monkeypatch):
+    """The honest fallback: no prepared rung means the tick planned, and says so."""
+    harness = _Harness(qapp)
+    host = harness.host(builder=_recording_builder)
+    monkeypatch.setattr(host, "_dpr", lambda: 1.0)
+    monkeypatch.setattr(
+        strip_band_module, "next_level", lambda _level, **_kwargs: None
+    )
+    try:
+        host.attach()
+        assert host.last_preparation is None, "no rung, nothing to prepare"
+
+        monkeypatch.setattr(host, "_dpr", lambda: 2.0)
+        host.on_view_changed()
+
+        zoomed = host.window()
+        assert zoomed.level_changed is True
+        assert zoomed.level_warm is False
+        assert host.level_changes == 1
+        assert host.cold_level_changes == 1
+        assert host.warm_level_changes == 0
+    finally:
+        host.detach()
+        harness.close()
+
+
+def test_a_recording_change_abandons_the_preparation_seam(qapp, monkeypatch):
+    """Latest-wins: the fill's token moves when the content changes.
+
+    Asserted on the injected seam (the ``should_continue`` the host hands the
+    fill), not on pixels: after a recording change that predicate is False, so a
+    fill in progress stops at its next tile instead of finishing work that
+    belongs to the pre-cut frames.
+    """
+    harness = _Harness(qapp)
+    host = harness.host(builder=_recording_builder)
+    captured: list = []
+
+    def _fake_prepare(*_args, **kwargs):
+        captured.append(kwargs.get("should_continue"))
+        from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+            LevelPreparation,
+        )
+
+        return LevelPreparation(level=_args[1], blocks=1, examined=1)
+
+    monkeypatch.setattr(strip_band_module, "prepare_level", _fake_prepare)
+    try:
+        host.attach()
+        token_before = host._prepare_token
+        report = host.prepare_adjacent_level()
+
+        assert report is not None and captured
+        assert captured[-1]() is True, "an idle host's fill may continue"
+
+        host.on_recording_changed()
+
+        assert host._prepare_token > token_before
+        assert captured[0]() is False, "a recording change must stop the fill"
+        assert host._prepare_cursor is None
+    finally:
+        host.detach()
+        harness.close()
+
+
+def test_a_scroll_tick_does_not_prepare_again(qapp):
+    """The fill belongs to a LEVEL entry, never to a scroll tick.
+
+    ``level_warm`` is false on any scroll tick (it exposed a block), so gating
+    the fill on "the window was cold" would charge every scroll an extra plan
+    pass and quietly blow the interaction budget. The trigger is the level.
+    """
+    harness = _Harness(qapp)
+    host = harness.host(builder=_recording_builder)
+    try:
+        host.attach()
+        first = host.last_preparation
+        assert first is not None
+        planned_before = host._tile_cache.prepared
+        runs_before = host.prepare_runs
+
+        bar = harness.scroll.horizontalScrollBar()
+        harness.scroll_to(bar.value() + max(1, (bar.maximum() - bar.value()) // 4))
+        harness.widget._on_host_scroll()
+
+        assert host.window().level_warm is False, "a scroll tick did plan a block"
+        assert host.prepare_runs == runs_before, "a scroll tick must not prepare"
+        assert host.last_preparation is first
+        assert host._tile_cache.prepared == planned_before
+    finally:
+        host.detach()
+        harness.close()
