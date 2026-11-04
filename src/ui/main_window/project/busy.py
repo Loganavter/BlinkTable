@@ -16,6 +16,52 @@ def _project_toast_manager(owner: "MainWindowProjectIo"):
     return getattr(owner._window, "toast_manager", None)
 
 
+def project_worker_in_flight(owner: "MainWindowProjectIo") -> bool:
+    """Whether a project open/save worker still has to finish."""
+    predicate = getattr(owner, "project_worker_in_flight", None)
+    if not callable(predicate):
+        return False
+    try:
+        return bool(predicate())
+    except Exception:
+        logger.debug("project worker probe failed", exc_info=True)
+        return False
+
+
+def defer_close_for_project_worker(owner: "MainWindowProjectIo | None", event) -> bool:
+    """Refuse a window close while a project worker runs; say why.
+
+    Returns ``True`` when the close was refused (``event.ignore()`` already
+    called). A pool ``clear()`` removes QUEUED runnables only and the shutdown
+    wait is capped (``core/bootstrap.py``), so accepting the close used to let
+    teardown proceed while ``write_project_zip`` was still creating temp files —
+    the "Fatal Python error: Segmentation fault" in the packaging worker
+    (observed 2026-10-28, mechanism confirmed 2026-11-04). The user closes
+    again once the toast clears.
+    """
+    if owner is None or not project_worker_in_flight(owner):
+        return False
+    kind = getattr(owner, "project_worker_kind", "save")
+    if kind == "open":
+        key, fallback = "menu.project_opening", "Opening project…"
+    else:
+        key, fallback = "menu.project_saving", "Saving project…"
+    translate = getattr(owner, "_tr", None)
+    message = translate(key, fallback) if callable(translate) else fallback
+    logger.info("Close deferred: a project worker is still running (%s)", kind)
+    try:
+        event.ignore()
+    except Exception:
+        logger.debug("close event ignore failed", exc_info=True)
+    try:
+        manager = _project_toast_manager(owner)
+        if manager is not None:
+            manager.show_toast(message, duration=3000, progress=0)
+    except Exception:
+        logger.debug("close-deferred toast failed", exc_info=True)
+    return True
+
+
 def _project_thread_pool(owner: "MainWindowProjectIo"):
     pool = getattr(owner._window, "thread_pool", None)
     if pool is not None:

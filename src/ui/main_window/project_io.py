@@ -41,8 +41,32 @@ class MainWindowProjectIo:
         self._tr = translate
         self.current_project_path: str | None = None
         self._project_worker = None
+        #: True while a project open/save worker is on the pool. The close path
+        #: refuses to tear the app down under it (see ``window.closeEvent``):
+        #: a pool ``clear()`` does not stop a RUNNING runnable and the shutdown
+        #: wait is capped, so teardown used to proceed while
+        #: ``write_project_zip`` was still creating temp files — the
+        #: "Fatal Python error: Segmentation fault" in the packaging worker
+        #: (2026-10-28, mechanism confirmed 2026-11-04).
+        self._project_worker_busy = False
+        #: "save" | "open" — which operation the busy flag refers to.
+        self._project_worker_kind = "save"
         # Landing spot for a future "save with pixel cache" UI checkbox.
         self.include_pixel_cache: bool = False
+
+    def project_worker_in_flight(self) -> bool:
+        """Whether a project open/save worker still has to finish."""
+        return bool(self._project_worker_busy)
+
+    def _mark_project_worker_busy(self, busy: bool, kind: str = "save") -> None:
+        self._project_worker_busy = bool(busy)
+        if busy:
+            self._project_worker_kind = str(kind)
+
+    @property
+    def project_worker_kind(self) -> str:
+        """Which operation the in-flight worker belongs to ("save" | "open")."""
+        return str(getattr(self, "_project_worker_kind", "save"))
 
     def _presenter(self):
         return getattr(self._window, "presenter", None)
