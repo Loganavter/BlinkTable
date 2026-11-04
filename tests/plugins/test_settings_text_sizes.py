@@ -157,7 +157,6 @@ def test_settings_radios_combos_spins_are_body(qapp: QApplication):
             dialog.combo_theme,
             dialog.combo_font_family,
             dialog.combo_rhi_backend,
-            dialog.combo_zoom_interp,
             dialog.combo_mag_interp,
             dialog.combo_laser_interp,
         ):
@@ -206,8 +205,6 @@ def test_settings_gallery_ai_page_is_body(qapp: QApplication):
 def test_settings_perf_extras_are_body(qapp: QApplication):
     dialog = _dialog(qapp)
     try:
-        assert isinstance(dialog.lbl_zoom_interp, Text)
-        assert _px(dialog.lbl_zoom_interp) == SETTINGS_BODY_PX
         assert isinstance(dialog.lbl_fps, Text)
         assert _px(dialog.lbl_fps) == SETTINGS_BODY_PX
         assert dialog.lbl_fps.text() == "FPS:"

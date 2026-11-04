@@ -210,8 +210,16 @@ class MultiCompareRhiRenderer:
         # textures) samples level 0 regardless of this filter, so reusing
         # one sampler everywhere is safe -- see generate_all_dirty_mips for
         # the array texture's own mip chain.
+        #
+        # Magnification is NEAREST (owner decision 2026-11-04): zoomed past
+        # 1:1 the canvas must show source texels as squares, like image
+        # compare's ``nearest`` sampler (``rhi_renderer/resources.py``) and
+        # every photo editor. A bilinear mag filter averaged neighbours and
+        # read as a muddy downscale at high zoom. Minification keeps
+        # Linear + mip Linear: nearest sampling below 1:1 is what aliases,
+        # so only the mag side may be unfiltered.
         self.sampler = new_rhi.newSampler(
-            QRhiSampler.Filter.Linear,
+            QRhiSampler.Filter.Nearest,
             QRhiSampler.Filter.Linear,
             QRhiSampler.Filter.Linear,
             QRhiSampler.AddressMode.ClampToEdge,
