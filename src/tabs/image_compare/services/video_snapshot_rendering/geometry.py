@@ -12,20 +12,55 @@ from tabs.image_compare.plugins.video_editor.services.video_export_models import
     GlobalCanvasBounds,
     VideoRenderRequest,
 )
+from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+    LAYER_PX,
+)
 
 
-#: Fixed strip-thumbnail target. The cover branch in ``prepare_miss`` is
-#: gated on exactly this size, so export letterbox/fill semantics (which
-#: never render at 160x90) stay untouched.
+#: The strip thumbnail's target/aspect reference. ``is_thumbnail_target_size``
+#: reads its ASPECT from here; the size itself is the shape a strip tile has
+#: when the block cell is one thumbnail wide.
 THUMBNAIL_TARGET_SIZE = (160, 90)
 
 
 def is_thumbnail_target_size(width, height) -> bool:
-    """True only for the 160x90 strip-thumbnail target (cover, not fit)."""
+    """True for a STRIP-TILE target: the thumbnail's aspect, one layer at most.
+
+    A strip tile is drawn stretched over one timeline block cell, so whatever
+    the plan bakes into its pixels is what the cell shows: a fit-inside plan
+    (aspect pads) puts bars inside the cell, a cover plan fills it. The gate
+    that selects cover is therefore about the target being a TILE, not about
+    one exact size: the tile follows the block cell at the target's DPR
+    (128x72 at 1x, 160x90 at 1.25x, 256x144 at 2x), all of them the
+    thumbnail's 16:9 aspect.
+
+    Two conditions, both load-bearing:
+
+    * **the thumbnail's aspect** (±1 px of the height that width implies, so a
+      rounded device size still counts). A target of another aspect is not a
+      block cell and keeps the fit-inside path with its pads.
+    * **no larger than one texture-array layer** (``LAYER_PX``): a strip tile
+      is uploaded 1:1 into one layer, so nothing bigger can be a tile. That is
+      what keeps the EXPORT path untouched — every export target above one
+      layer (1920x1080, 800x600, 3840x2160, ...) is not a tile and keeps the
+      fit + letterbox semantics it has always had.
+
+    Deliberately not "any target": widening to aspect alone would send every
+    16:9 export frame down the cover path and crop the picture instead of
+    letterboxing it.
+    """
     try:
-        return (int(width), int(height)) == THUMBNAIL_TARGET_SIZE
+        target_w = int(width)
+        target_h = int(height)
     except (TypeError, ValueError):
         return False
+    if target_w <= 0 or target_h <= 0:
+        return False
+    if max(target_w, target_h) > LAYER_PX:
+        return False
+    thumb_w, thumb_h = THUMBNAIL_TARGET_SIZE
+    expected_h = int(round(target_w * thumb_h / float(thumb_w)))
+    return abs(target_h - expected_h) <= 1
 
 
 def thumbnail_proxy_dest_scale(

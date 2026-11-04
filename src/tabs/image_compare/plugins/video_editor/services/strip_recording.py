@@ -14,10 +14,12 @@ carries a second geometry formula:
   timeline fps — a block is not a frame: at the fitted zoom one block spans
   several frames, and ``block / fps`` would ask the recording for the wrong
   instant (owner-visible: every tile showing frame 0's neighbourhood).
-* :func:`strip_tile_size` is the tile geometry: one FILMSTRIP THUMBNAIL, the
-  same ``THUMBNAIL_TARGET_SIZE`` the QPainter strip drew before phase 3, never
-  the block cell's own aspect (see its docstring — the cell aspect is what
-  letterboxes every frame into a narrow sliver).
+* :func:`strip_tile_size` is the tile geometry: one strip BLOCK CELL in device
+  pixels — ``strip_block_layout``'s block width times the strip row height,
+  scaled by the target DPR and clamped to one array layer, aspect preserved.
+  The cell is 16:9 at every reachable zoom (measured 2026-11-04), so the tile
+  is too, and ``is_thumbnail_target_size`` (the plan builder's cover gate) reads
+  the thumbnail's aspect rather than an exact 160x90.
 * :class:`StripRecordingAdapter` is the object handed to ``build_window``:
   ``evaluate_at`` delegates to the recording, ``images_for`` delegates to the
   exporter's proxy seam (never a decode on the interaction path).
@@ -62,10 +64,20 @@ class TimelineStripLayout(StripBlockLayout):
     the absolute block index of ``block_frames[0]``). ``block_time`` therefore
     reproduces the exact frame the QPainter strip would have drawn, while the
     tile size / fps / column count stay plain layout data.
+
+    ``block_size`` is the CELL those blocks are drawn in — ``(draw_w, row
+    height)`` from the timeline's own layout — and ``dpr`` the target ratio the
+    tile was sized at. ``tile_size`` (the base class field ``build_window``
+    validates against) is the device-pixel tile derived from them
+    (:func:`strip_tile_size`), so the level a window plans at is
+    ``(tile_size, dpr=1.0)``: the DPR is already IN the tile, and carrying it
+    twice would make the same pixels two levels.
     """
 
     first_block: int = 0
     block_frames: tuple[int, ...] = ()
+    block_size: tuple[int, int] = THUMBNAIL_TARGET_SIZE
+    dpr: float = 1.0
 
     def block_time(self, block: int) -> float:
         index = int(block) - int(self.first_block)
@@ -108,44 +120,93 @@ def strip_visible_span(timeline):
     return (content_start_x, start_x, end_x)
 
 
-def strip_tile_size() -> tuple[int, int]:
-    """The band's tile geometry: one FILMSTRIP THUMBNAIL, not the block cell.
+def strip_tile_size(
+    block_size: tuple[int, int] | None = None, dpr: float = 1.0
+) -> tuple[int, int]:
+    """The band's tile geometry: one strip BLOCK CELL, in DEVICE pixels.
 
-    A strip cell is the same thumbnail the QPainter strip rendered, and
-    ``THUMBNAIL_TARGET_SIZE`` exactly is what selects that path: the plan
-    builder's ``is_thumbnail_target_size`` check renders the pair full-bleed
-    (``cover_source_to_content``, no pads, no ``overlay_clip_rect``) only at
-    160x90, and every other target takes the fit-inside path with aspect pads.
+    ``block_size`` is the cell the tile is stretched over, as the timeline's
+    own layout declares it: ``strip_block_layout``'s ``draw_w`` (the block
+    width) plus the strip row height (``strip_row_height``). One tile covers
+    exactly one cell, so the tile IS the cell — at the target's device pixel
+    ratio, because the band renders into a QRhi target sized in device pixels.
 
-    Planning the tile at the block cell's own aspect (the phase-2 wiring) sent
-    every frame down that fit path, so the band drew a letterboxed frame with
-    black bars inside each cell — on a wide/zoomed cell (or through the
-    ``LAYER_PX`` cap, which froze the tile at 256 while the cell kept
-    growing) the visible content collapsed to a narrow vertical sliver. The
-    cell aspect never has to reach the plane: the one-pass renderer stretches
-    one tile over one block cell, exactly as the timeline stretched the
-    160x90 pixmap into it.
+    ``block_size=None`` keeps the historical filmstrip thumbnail
+    (``THUMBNAIL_TARGET_SIZE``) for a caller with no layout in hand (the
+    latency bench's default case). It is the same 16:9 shape, one block wide.
 
-    Clamped to ``LAYER_PX`` because one tile is uploaded 1:1 into one
-    array layer; at 160x90 the clamp never bites (it only exists for the
-    contracts that allow a caller-chosen tile).
+    Why the cell and not the old fixed thumbnail: a 160x90 tile in a 128x72
+    cell (measured live 2026-11-03) was downscaled at 1x and upscaled 1.6x on
+    a 2x screen — the band paid resample twice and showed a soft frame. Cell x
+    DPR is the pixels the cell actually has.
+
+    **What does NOT move this number: zoom.** Measured 2026-11-04 on the real
+    timeline (viewport.strip_block_layout over the whole reachable range, the
+    toolkit's fitted zoom 0.047 up to its 1.0 clamp): ``draw_w`` is constant
+    128 px and the strip row is 72 px, so the cell — hence the tile — is
+    constant. Zoom changes frames-per-block (21 at the fitted view, 1 at 1:1),
+    never a cell's pixel size. The reachable user gesture that changes this
+    tile is the target DPR (``StripBandHost._dpr``: the window moving to a
+    HiDPI screen), which walks the level ladder exactly (128x72 -> 256x144).
+    A zoom-driven rung needs a zoom-scaled cell from the toolkit layout; the
+    layout exposes ``draw_w`` at the visible span and no zoom scalar, and the
+    sibling toolkit checkout is not editable from this cell, so the mapping
+    stays honest instead of inventing a second multiplier here.
+
+    Clamped to one array layer (``LAYER_PX``) with the aspect PRESERVED: one
+    tile is uploaded 1:1 into one array layer, so a 2.5x cell (320x180) caps
+    at 256x144 instead of distorting one axis.
     """
-    width, height = THUMBNAIL_TARGET_SIZE
-    return (
-        max(1, min(int(width), int(LAYER_PX))),
-        max(1, min(int(height), int(LAYER_PX))),
-    )
+    if block_size is None:
+        width, height = THUMBNAIL_TARGET_SIZE
+    else:
+        width, height = int(block_size[0]), int(block_size[1])
+    scale = max(0.1, float(dpr))
+    tile_w = max(1, int(round(width * scale)))
+    tile_h = max(1, int(round(height * scale)))
+    longest = max(tile_w, tile_h)
+    if longest > int(LAYER_PX):
+        factor = float(LAYER_PX) / float(longest)
+        tile_w = max(1, int(round(tile_w * factor)))
+        tile_h = max(1, int(round(tile_h * factor)))
+    return tile_w, tile_h
 
 
-def timeline_strip_layout(timeline, *, fps):
+def strip_row_height(timeline, block_width: float) -> int:
+    """The strip row's declared height, in px — the block cell's height.
+
+    ``strip_block_layout`` returns ``(block_x, draw_w, rep_frame)``: it declares
+    the block's WIDTH and no height. The height of the row those blocks are
+    laid out in is the timeline's own ``STRIP_HEIGHT`` (the band is placed over
+    exactly that row, see ``StripBandHost._place``), so that is what is read —
+    never re-derived from the width.
+
+    A stand-in timeline that declares no row height falls back to the block
+    width at the thumbnail's aspect (the same 16:9 the measured cells are:
+    128x72).
+    """
+    try:
+        height = int(getattr(timeline, "STRIP_HEIGHT", 0) or 0)
+    except Exception:
+        height = 0
+    if height > 0:
+        return height
+    thumb_w, thumb_h = THUMBNAIL_TARGET_SIZE
+    return max(1, int(round(float(block_width) * thumb_h / float(thumb_w))))
+
+
+def timeline_strip_layout(timeline, *, fps, dpr: float = 1.0):
     """``(layout, first_block, count)`` for the band's current view, or ``None``.
 
     One ``strip_block_layout`` call decides every number here: the first
     visible block, the block count, each block's representative frame and the
-    block width (which only locates the first block — the tile is the
-    thumbnail, see :func:`strip_tile_size`). Columns equal blocks because the
-    band is one row — so tile ``i`` of the window lands on block ``i`` of the
-    strip.
+    block WIDTH (``draw_w``) — which is the cell's width, so the tile is sized
+    from it rather than from a second formula (the cell's height is the strip
+    row's, ``strip_row_height``). The tile is that cell at ``dpr`` (the target's
+    device pixel ratio), because the band renders into a device-pixel target.
+
+    Columns equal blocks because the band is one row — so tile ``i`` of the
+    window lands on block ``i`` of the strip.
     """
     try:
         total = int(getattr(timeline, "_total_frames", 0) or 0)
@@ -174,7 +235,11 @@ def timeline_strip_layout(timeline, *, fps):
         return None
     first_block = max(0, int(round((blocks[0][0] - content_start_x) / draw_w)))
     visible = blocks[:MAX_BLOCKS]
-    tile_w, tile_h = strip_tile_size()
+    block_size = (
+        max(1, int(round(draw_w))),
+        strip_row_height(timeline, draw_w),
+    )
+    tile_w, tile_h = strip_tile_size(block_size, dpr)
     if tile_w <= 0 or tile_h <= 0:
         return None
     layout = TimelineStripLayout(
@@ -184,6 +249,8 @@ def timeline_strip_layout(timeline, *, fps):
         cols=len(visible),
         first_block=first_block,
         block_frames=tuple(int(block[2]) for block in visible),
+        block_size=block_size,
+        dpr=float(dpr),
     )
     return layout, first_block, len(visible)
 
@@ -268,6 +335,7 @@ __all__ = [
     "StripRecordingAdapter",
     "TimelineStripLayout",
     "proxy_pair_for",
+    "strip_row_height",
     "strip_tile_size",
     "strip_visible_span",
     "timeline_strip_layout",

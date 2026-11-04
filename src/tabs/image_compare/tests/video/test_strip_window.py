@@ -855,6 +855,40 @@ def test_the_level_comes_from_the_timeline_layout_and_the_target_dpr():
     assert level_for_layout(layout).tile_size == layout.tile_size
 
 
+def test_the_strip_layout_declares_the_device_tile_so_its_level_dpr_is_one():
+    """A strip tile already IS device pixels: the level must not scale it twice.
+
+    ``timeline_strip_layout`` sizes the tile from the block cell at the target's
+    device pixel ratio (128x72 cell -> 256x144 tile at 2x), so the level that
+    window plans at is ``(256, 144, 1.0)``: its ``device_size`` is exactly the
+    pixels the plan has. Handing ``level_for_layout`` the target's DPR again
+    would claim a 512x288 device level whose plans are 256x144 — a level the
+    pass cannot draw, and a cache key that never hits the prepared rung.
+    """
+    from tabs.image_compare.plugins.video_editor.services.strip_recording import (
+        TimelineStripLayout,
+    )
+    from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
+        level_for_layout,
+        strip_level,
+    )
+
+    layout = TimelineStripLayout(
+        tile_size=(256, 144),
+        fps=10.0,
+        block_count=8,
+        cols=8,
+        block_size=(128, 72),
+        dpr=2.0,
+    )
+
+    level = level_for_layout(layout)
+
+    assert level == strip_level(256, 144, 1.0)
+    assert level.device_size == layout.tile_size
+    assert level.device_size == (256, 144)
+
+
 def test_the_adjacent_level_is_one_rung_and_fits_one_array_layer():
     """Up = the sharpest tile of the same aspect the layer holds; down = half."""
     from tabs.image_compare.services.video_snapshot_rendering.strip_window import (
