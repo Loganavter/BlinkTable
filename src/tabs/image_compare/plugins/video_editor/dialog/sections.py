@@ -838,6 +838,12 @@ def create_timeline_scroll_area(dialog):
     scroll_area = SurfaceScrollArea()
     scroll_area.setObjectName("VideoEditorTimelineScrollArea")
     scroll_area.setMinimumHeight(scaled_px(MIN_VIDEO_EDITOR_TIMELINE_HEIGHT_PX))
+    # One horizontal control, not two (plan-timeline-event-synchrony-2026-11-04,
+    # phase P3; owner decision 2026-11-06): the timeline draws its own footer
+    # bar for this axis, so the host's overlay thumb is turned off instead of
+    # painting over it. The native horizontal bar keeps range and value — it
+    # stays the scrolling mechanism, and the vertical overlay thumb is untouched.
+    scroll_area.set_horizontal_scrollbar_enabled(False)
 
     store = None
     if hasattr(dialog, "export_controller") and dialog.export_controller:
