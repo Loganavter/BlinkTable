@@ -16,3 +16,8 @@ class ExportSaveContext:
     native_width: int = 0
     native_height: int = 0
     virtual_canvas_active: bool = False
+    # "Crop to images": the image area (native px) and the same rect in preview
+    # px, so the dialog can show the file it will write. ``None`` = the plan has
+    # no padding to trim (full canvas == content).
+    crop_native_size: tuple[int, int] | None = None
+    preview_crop_rect: tuple[int, int, int, int] | None = None

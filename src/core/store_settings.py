@@ -42,6 +42,7 @@ class SettingsState:
     export_last_format: str = "PNG"
     export_quality: int = 95
     export_fill_background: bool = False
+    export_crop_to_image: bool = False
     export_background_color: Color = field(
         default_factory=lambda: Color(255, 255, 255, 255)
     )

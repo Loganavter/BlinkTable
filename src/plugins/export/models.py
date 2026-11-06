@@ -20,3 +20,15 @@ class ExportDialogState:
     # Image Compare: only when magnifier/uncrop grew the canvas past 0..1.
     # Multi Compare keeps True so transparent formats can still fill empty slots.
     virtual_canvas_active: bool = True
+    # Image Compare only: trim the exported file to the area the images occupy
+    # (virtual-canvas pads / letterbox background dropped). ``available`` is the
+    # tab's capability flag, so the shared dialog hides the option for tabs that
+    # have no such content rect (Multi Compare leaves it False).
+    crop_to_image: bool = False
+    crop_to_image_available: bool = False
+    # Native (1x) size of that image area; the resolution fields follow it while
+    # the option is on, so the field keeps meaning "what will be written".
+    crop_native_size: tuple[int, int] | None = None
+    # Same area in PREVIEW-raster px — the dialog crops the preview with it, so
+    # the pane shows exactly the file that will be written.
+    crop_preview_rect: tuple[int, int, int, int] | None = None

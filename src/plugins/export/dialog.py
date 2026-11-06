@@ -6,7 +6,7 @@ from typing import Iterable
 
 import PIL.Image
 import shiboken6 as sip
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPixmap
 from shared_toolkit.ui.themed_dialog import ThemedDialog
 from PySide6.QtWidgets import (
@@ -106,6 +106,11 @@ class ExportDialog(ThemedDialog):
         nw, nh = native_size if native_size and native_size[0] > 0 and native_size[1] > 0 else (0, 0)
         self._native_width = int(nw)
         self._native_height = int(nh)
+        # Base size the resolution fields currently describe: the full canvas,
+        # or the image area while "crop to images" is on. The toggle keeps the
+        # user's scale and re-derives the pair, so the field never promises a
+        # size the file will not have.
+        self._resolution_base = (self._native_width, self._native_height)
         self._aspect_ratio = (self._native_width / self._native_height) if self._native_height else 0.0
         self._suppress_ratio_recalc = False
         try:
@@ -273,6 +278,7 @@ class ExportDialog(ThemedDialog):
             (self.checkbox_png_optimize, "export.optimize_png", ""),
             (self.checkbox_fill_bg, "export.fill_background", ""),
             (self.btn_bg_color, "export.background_color", ""),
+            (self.checkbox_crop_to_image, "export.crop_to_image", ""),
             (self.checkbox_include_metadata, "export.include_metadata", ""),
             (self.comment_label, "export.comment", ":"),
             (self.checkbox_comment_default, "export.remember_by_default", ""),
@@ -287,6 +293,13 @@ class ExportDialog(ThemedDialog):
         self.btn_lock_ratio.setToolTip(
             self._tr("export.lock_aspect_ratio", "Lock aspect ratio")
         )
+        if hasattr(self, "checkbox_crop_to_image"):
+            self.checkbox_crop_to_image.setToolTip(
+                self._tr(
+                    "export.crop_to_image_tooltip",
+                    "Keep only the area the images occupy; empty margins are trimmed.",
+                )
+            )
         if hasattr(self.action_bar, "_apply_button_minimums"):
             self.action_bar._apply_button_minimums()
         if hasattr(self.action_bar, "lock_content_minimum_height"):
@@ -443,6 +456,9 @@ class ExportDialog(ThemedDialog):
         # clears/disables when virtual canvas is inactive.
         self.checkbox_fill_bg.setChecked(bool(self.dialog_state.fill_background))
         self._sync_background_controls()
+        self.checkbox_crop_to_image.setChecked(
+            bool(getattr(self.dialog_state, "crop_to_image", False))
+        )
 
         self.checkbox_include_metadata.setChecked(True)
 
@@ -482,6 +498,69 @@ class ExportDialog(ThemedDialog):
         path = self.favorite_dir
         if path:
             self.edit_dir.setText(path)
+
+    # -- crop to images ----------------------------------------------------
+
+    def _crop_to_image_checked(self) -> bool:
+        box = getattr(self, "checkbox_crop_to_image", None)
+        return bool(box is not None and box.isChecked())
+
+    def _effective_native_size(self) -> tuple[int, int]:
+        """Base size the resolution fields describe (canvas or image area)."""
+        crop = getattr(self.dialog_state, "crop_native_size", None)
+        if self._crop_to_image_checked() and crop and crop[0] > 0 and crop[1] > 0:
+            return (int(crop[0]), int(crop[1]))
+        return (self._native_width, self._native_height)
+
+    def _on_crop_to_image_toggled(self, _checked: bool = False) -> None:
+        """Re-express the resolution at the new base, keeping the user's scale."""
+        prev_base = self._resolution_base
+        new_base = self._effective_native_size()
+        try:
+            current_w = int(self.edit_width.text())
+        except (AttributeError, ValueError):
+            current_w = prev_base[0]
+        scale = (
+            current_w / float(prev_base[0])
+            if prev_base[0] > 0 and current_w > 0
+            else self._initial_scale
+        )
+        self._resolution_base = new_base
+        self._aspect_ratio = (
+            new_base[0] / float(new_base[1]) if new_base[1] > 0 else 0.0
+        )
+        if new_base[0] > 0 and new_base[1] > 0 and hasattr(self, "edit_width"):
+            self._suppress_ratio_recalc = True
+            try:
+                self.edit_width.setText(
+                    str(max(1, int(round(new_base[0] * scale))))
+                )
+                self.edit_height.setText(
+                    str(max(1, int(round(new_base[1] * scale))))
+                )
+            finally:
+                self._suppress_ratio_recalc = False
+        self._apply_preview_pixmap()
+
+    def _effective_preview_source(self):
+        """Preview pixmap for the current state (cropped when the option is on)."""
+        source = self._preview_source_pixmap
+        rect = getattr(self.dialog_state, "crop_preview_rect", None)
+        if (
+            source is None
+            or source.isNull()
+            or rect is None
+            or not self._crop_to_image_checked()
+        ):
+            return source
+        try:
+            x, y, w, h = (int(v) for v in rect)
+        except (TypeError, ValueError):
+            return source
+        box = QRect(x, y, w, h).intersected(QRect(0, 0, source.width(), source.height()))
+        if box.isEmpty():
+            return source
+        return source.copy(box)
 
     def _fill_background_allowed(self) -> bool:
         """Fill only when pads exist (virtual canvas past 0..1) and format has alpha."""
@@ -558,6 +637,9 @@ class ExportDialog(ThemedDialog):
 
         has_transparency = fmt in ("PNG", "TIFF", "WEBP", "JXL")
         fill_allowed = self._fill_background_allowed()
+        self.checkbox_crop_to_image.setVisible(
+            bool(getattr(self.dialog_state, "crop_to_image_available", False))
+        )
         self.checkbox_fill_bg.setVisible(has_transparency)
         self.checkbox_fill_bg.setEnabled(fill_allowed)
         if has_transparency and not fill_allowed:
@@ -693,12 +775,11 @@ class ExportDialog(ThemedDialog):
         label = getattr(self, "preview_label", None)
         if label is None:
             return
-        if self._preview_source_pixmap is None or self._preview_source_pixmap.isNull():
+        source = self._effective_preview_source()
+        if source is None or source.isNull():
             label.clear_preview()
             return
-        label.set_preview_source(
-            self._preview_source_pixmap, self._preview_fill_color()
-        )
+        label.set_preview_source(source, self._preview_fill_color())
         label.bake_preview()
 
     def _pixmap_from_pil(self, pil_img: PIL.Image.Image) -> QPixmap:
@@ -773,6 +854,10 @@ class ExportDialog(ThemedDialog):
                 else False
             ),
             "fill_background_editable": self._fill_background_allowed(),
+            "crop_to_image": bool(
+                self._crop_to_image_checked()
+                and getattr(self.dialog_state, "crop_to_image_available", False)
+            ),
             "virtual_canvas_active": bool(
                 getattr(self.dialog_state, "virtual_canvas_active", True)
             ),
@@ -789,8 +874,9 @@ class ExportDialog(ThemedDialog):
             if w > 0 and h > 0:
                 opts["width"] = w
                 opts["height"] = h
-                if self._native_width > 0:
-                    opts["resolution_scale"] = w / float(self._native_width)
+                base_w, _base_h = self._effective_native_size()
+                if base_w > 0:
+                    opts["resolution_scale"] = w / float(base_w)
         except (ValueError, AttributeError):
             pass
         return opts
@@ -836,11 +922,13 @@ class ExportDialog(ThemedDialog):
             self._suppress_ratio_recalc = False
 
     def _reset_resolution_to_native(self):
-        if self._native_width <= 0 or self._native_height <= 0:
+        base_w, base_h = self._effective_native_size()
+        if base_w <= 0 or base_h <= 0:
             return
+        self._resolution_base = (base_w, base_h)
         self._suppress_ratio_recalc = True
-        self.edit_width.setText(str(self._native_width))
-        self.edit_height.setText(str(self._native_height))
+        self.edit_width.setText(str(base_w))
+        self.edit_height.setText(str(base_h))
         self._suppress_ratio_recalc = False
 
     def accept(self):

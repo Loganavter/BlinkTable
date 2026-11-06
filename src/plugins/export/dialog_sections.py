@@ -120,9 +120,10 @@ def build_resolution_row(dialog) -> None:
     res_layout.addWidget(dialog.edit_height)
     res_layout.addStretch()
 
-    if dialog._native_width > 0 and dialog._native_height > 0:
-        initial_w = max(1, int(round(dialog._native_width * dialog._initial_scale)))
-        initial_h = max(1, int(round(dialog._native_height * dialog._initial_scale)))
+    base_w, base_h = dialog._effective_native_size()
+    if base_w > 0 and base_h > 0:
+        initial_w = max(1, int(round(base_w * dialog._initial_scale)))
+        initial_h = max(1, int(round(base_h * dialog._initial_scale)))
     else:
         initial_w, initial_h = 1920, 1080
     dialog.edit_width.setText(str(initial_w))
@@ -218,6 +219,27 @@ def build_background_row(dialog) -> None:
     dialog.current_bg_color = QColor(255, 255, 255, 255)
 
 
+def build_crop_row(dialog) -> None:
+    """Image Compare: trim the file to the image area (pads/letterbox dropped).
+
+    Hidden unless the tab declares ``crop_to_image_available`` — the rect the
+    crop uses is tab-owned, so a tab without one must not offer the option.
+    """
+    dialog.checkbox_crop_to_image = CheckBox(
+        dialog._tr("export.crop_to_image", "Crop to images")
+    )
+    dialog.checkbox_crop_to_image.setToolTip(
+        dialog._tr(
+            "export.crop_to_image_tooltip",
+            "Keep only the area the images occupy; empty margins are trimmed.",
+        )
+    )
+    dialog.checkbox_crop_to_image.toggled.connect(
+        dialog._on_crop_to_image_toggled
+    )
+    BACKGROUND.tag_member(dialog.checkbox_crop_to_image, "export.crop_to_image")
+
+
 def build_metadata_block(dialog) -> None:
     dialog.checkbox_include_metadata = CheckBox(
         dialog._tr("export.include_metadata", "Include metadata")
@@ -272,6 +294,7 @@ def assemble_export_form(dialog) -> tuple[QFrame, QFrame]:
     build_quality_controls(dialog)
     build_png_options(dialog)
     build_background_row(dialog)
+    build_crop_row(dialog)
     build_metadata_block(dialog)
     build_action_bar(dialog)
 
@@ -292,6 +315,7 @@ def assemble_export_form(dialog) -> tuple[QFrame, QFrame]:
     right_layout.addWidget(dialog.png_row)
     right_layout.addStretch(1)
     right_layout.addWidget(dialog.bg_color_row)
+    right_layout.addWidget(dialog.checkbox_crop_to_image)
     right_layout.addStretch(1)
     right_layout.addWidget(dialog.checkbox_include_metadata)
     right_layout.addWidget(dialog.comment_label)

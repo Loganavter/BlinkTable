@@ -14,7 +14,9 @@
     "lock_aspect_ratio": "Bloquear proporção",
     "select_background_color": "Selecionar Cor de Fundo",
     "select_output_directory": "Selecionar Diretório de Saída",
-    "export_first_frame": "Apenas o primeiro quadro é exportado"
+    "export_first_frame": "Apenas o primeiro quadro é exportado",
+    "crop_to_image": "Cortar pelas imagens",
+    "crop_to_image_tooltip": "Mantém apenas a área ocupada pelas imagens; as margens vazias são cortadas."
   },
   "tooltip": {
     "use_favorite": "Usar Favorito"

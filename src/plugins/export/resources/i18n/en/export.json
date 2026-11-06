@@ -14,7 +14,9 @@
     "lock_aspect_ratio": "Lock aspect ratio",
     "select_background_color": "Select Background Color",
     "select_output_directory": "Select Output Directory",
-    "export_first_frame": "Only the first frame is exported"
+    "export_first_frame": "Only the first frame is exported",
+    "crop_to_image": "Crop to images",
+    "crop_to_image_tooltip": "Keep only the area the images occupy; empty margins are trimmed."
   },
   "tooltip": {
     "use_favorite": "Use Favorite"

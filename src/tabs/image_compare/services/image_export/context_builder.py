@@ -202,6 +202,23 @@ class ExportContextBuilder:
         plan = prepared_frame.plan
         native_w = int(getattr(plan, "canvas_w", 0) or image1_for_save.width)
         native_h = int(getattr(plan, "canvas_h", 0) or image1_for_save.height)
+        # "Crop to images": the plan's own content rect (pads/letterbox dropped)
+        # in native px, plus the same rect mapped onto the preview raster so the
+        # dialog can crop its pane without a second render.
+        from tabs.image_compare.services.image_export.content_crop import (
+            content_rect_for_plan,
+            scale_rect_to_raster,
+        )
+
+        content_rect = content_rect_for_plan(plan)
+        crop_native_size = (
+            (int(content_rect[2]), int(content_rect[3])) if content_rect else None
+        )
+        preview_crop_rect = (
+            scale_rect_to_raster(content_rect, preview_img.size)
+            if content_rect is not None and preview_img is not None
+            else None
+        )
         return ExportSaveContext(
             original1_full=original1_full,
             original2_full=original2_full,
@@ -214,6 +231,8 @@ class ExportContextBuilder:
             native_width=native_w,
             native_height=native_h,
             virtual_canvas_active=bool(global_bounds.extends_beyond_unit()),
+            crop_native_size=crop_native_size,
+            preview_crop_rect=preview_crop_rect,
         )
 
     def _downscale_for_preview(
