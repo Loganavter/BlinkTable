@@ -145,3 +145,45 @@ def test_live_plan_none_box_parity_with_today(tmp_path):
     assert plan.image2 is disp2
     assert tuple(store.runtime_cache.overlay_clip_rect) == (0, 0, *FULL)
     assert resolve_plan_logical_image_rect(plan) == (0, 0, *FULL)
+
+
+def test_production_live_path_sizes_the_canvas_from_the_crop_box(tmp_path, monkeypatch):
+    """The LIVE plan follows the box even though the Store slot carries no service.
+
+    Production shape: ``PipelineCacheState`` holds the pixel/preview/unify
+    mirrors and nothing else, so ``crop_service`` is fetched from the session
+    controller (``set_session_controller`` backlink on the canvas widget).
+    Reading only the Store slot made every cropped pair keep the uncropped
+    source aspect on the canvas basis while the letterbox fitted the box —
+    the owner report "cropping black areas does not recalculate the aspect
+    ratio of the whole displayed comparison".
+    """
+    from types import SimpleNamespace
+
+    from tabs.image_compare.canvas.presentation.surface import apply_store_to_canvas
+
+    p1 = _bordered_png(tmp_path / "a.png")
+    p2 = _bordered_png(tmp_path / "b.png")
+    svc = _warmed_service(p1, p2)
+    disp1 = Image.open(p1).convert("RGBA")
+    disp2 = Image.open(p2).convert("RGBA")
+    # No ``crop_service`` on the pipeline slot — exactly what the app builds.
+    store = _make_store(p1, p2, disp1, disp2)
+    canvas = SimpleNamespace(
+        _pending_session_controller=SimpleNamespace(_get_crop_service=lambda: svc),
+        runtime_state=SimpleNamespace(_store=store, _source_image_ids=(p1, p2)),
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        "ui.canvas_presentation.plan_applicator.apply_canvas_render_plan",
+        lambda _canvas, plan, **_kw: captured.setdefault("plan", plan),
+    )
+
+    apply_store_to_canvas(canvas, store, disp1, disp2)
+
+    plan = captured["plan"]
+    assert (plan.canvas_w, plan.canvas_h) == BOX_DIMS
+    assert (plan.canvas_w, plan.canvas_h) != FULL
+    assert get_image_dims(plan.image1) == BOX_DIMS
+    assert get_image_dims(plan.image2) == BOX_DIMS
+    assert tuple(store.runtime_cache.overlay_clip_rect) == (0, 0, *BOX_DIMS)
