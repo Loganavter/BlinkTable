@@ -39,50 +39,80 @@ __all__ = [
     "_get_unified_images",
 ]
 
-def _box_clipped_live_inputs(store, display_image1, display_image2):
+def _box_clipped_live_inputs(store, display_image1, display_image2, crop_boxes=None):
     """Box-clipped live display inputs, or ``None`` when no box is active.
 
     W3e: with full-frame stores the live plan must size from the box-clipped
     content (canvas, pads, clip rect), not the full frame — the envelope,
     uploads and Store geometry already fit the box. Resolves through the
     canvas layer's single box seam (``texture_parts.crop_clip``: document
-    paths + per-image overrides + pipeline-slot ``crop_service``); any failure — no service,
-    unwarmed service (GUI-thread warmup kick instead of blocking), no box —
-    returns ``None`` and the caller keeps today's full-frame behavior
+    paths + per-image overrides + the session crop service); any failure — no
+    service, unwarmed service (GUI-thread warmup kick instead of blocking), no
+    box — returns ``None`` and the caller keeps today's full-frame behavior
     bit-identical. PIL/QImage inputs are clipped to views;
     ``TiledPixelStore`` stays lazy (tile residency crops) while sizes still
     follow the box. Slot 1 is the sizing basis (as today); without its box
     the whole helper stays ``None``. Sources/keys/plan math untouched.
+
+    ``crop_boxes`` — ``(raw_box1, raw_box2)`` in full-source coords, already
+    resolved by the caller through ``resolve_slot_boxes`` (the same seam the
+    upload/letterbox owner uses). The LIVE caller MUST pass it: production
+    ``PipelineCacheState`` carries the pixel/preview/unify mirrors only, so the
+    legacy ``pipeline.crop_service`` lookup below is always ``None`` there —
+    reading it alone left every cropped pair with the uncropped source aspect
+    on the canvas basis (owner report: "cropping black areas does not
+    recalculate the aspect ratio of the whole displayed comparison"). ``None``
+    keeps the legacy slot lookup for test fakes that install the service
+    there.
     """
     try:
         from shared.image_processing.image_dims import get_image_dims
         from tabs.image_compare.canvas.texture_parts.crop_clip import (
             box_dims,
             clip_image_for_upload,
-            resolve_box_for_path,
             scaled_box_for_source,
         )
-        from tabs.image_compare.state.document import crop_override_for_path
     except Exception:
         return None
     try:
         doc = store.get_session_state_slot("document")
         path1 = getattr(doc, "image1_path", None)
         path2 = getattr(doc, "image2_path", None)
-        pipe = store.get_session_state_slot("pipeline")
-        svc = getattr(pipe, "crop_service", None)
     except Exception:
-        return None
-    if svc is None:
-        return None
-    try:
-        ov1 = crop_override_for_path(doc, path1)
-        ov2 = crop_override_for_path(doc, path2)
-    except Exception:
-        ov1, ov2 = None, None
+        doc, path1, path2 = None, None, None
+    if crop_boxes is not None:
+        try:
+            raw1, raw2 = crop_boxes[0], crop_boxes[1]
+        except Exception:
+            raw1 = raw2 = None
+    else:
+        try:
+            from tabs.image_compare.canvas.texture_parts.crop_clip import (
+                resolve_box_for_path,
+            )
+            from tabs.image_compare.state.document import crop_override_for_path
+
+            pipe = store.get_session_state_slot("pipeline")
+            svc = getattr(pipe, "crop_service", None)
+        except Exception:
+            return None
+        if svc is None:
+            return None
+        try:
+            ov1 = crop_override_for_path(doc, path1)
+            ov2 = crop_override_for_path(doc, path2)
+        except Exception:
+            ov1, ov2 = None, None
+        try:
+            raw1 = resolve_box_for_path(path1, svc, override=ov1)
+        except Exception:
+            raw1 = None
+        try:
+            raw2 = resolve_box_for_path(path2, svc, override=ov2)
+        except Exception:
+            raw2 = None
     try:
         live1 = get_image_dims(display_image1)
-        raw1 = resolve_box_for_path(path1, svc, override=ov1)
         box1 = scaled_box_for_source(raw1, path=path1, live_size=live1)
     except Exception:
         box1 = None
@@ -90,7 +120,6 @@ def _box_clipped_live_inputs(store, display_image1, display_image2):
         return None
     try:
         live2 = get_image_dims(display_image2)
-        raw2 = resolve_box_for_path(path2, svc, override=ov2)
         box2 = scaled_box_for_source(raw2, path=path2, live_size=live2)
     except Exception:
         box2 = None
@@ -103,14 +132,26 @@ def _box_clipped_live_inputs(store, display_image1, display_image2):
         )
     except Exception:
         return None
-    w, h = box_dims(box1, live1)
+    w1, h1 = box_dims(box1, live1)
+    if box2 is not None:
+        w2, h2 = box_dims(box2, live2)
+    else:
+        try:
+            w2, h2 = int(live2[0]), int(live2[1])
+        except Exception:
+            w2, h2 = 0, 0
     try:
-        w, h = int(w), int(h)
+        w1, h1, w2, h2 = int(w1), int(h1), int(w2), int(h2)
     except Exception:
         return None
-    if w <= 0 or h <= 0:
+    if w1 <= 0 or h1 <= 0:
         return None
-    return (clipped1, clipped2, w, h)
+    # BOTH sides' box dims travel with the clipped views: a lazy
+    # ``TiledPixelStore`` is returned unclipped by ``clip_image_for_upload``
+    # (tiles crop on residency), so its ``.size`` still reports the FULL frame —
+    # re-reading it downstream re-inflated the canvas basis to the uncropped
+    # aspect even though the box had been found.
+    return (clipped1, clipped2, w1, h1, w2, h2)
 
 def build_canvas_plan(
     viewport_source,
@@ -135,6 +176,7 @@ def build_canvas_plan(
     guides_thickness: int | None = None,
     image_is_padded_composite: bool = False,
     geometry_letterbox: bool = False,
+    crop_boxes=None,
 ) -> CanvasRenderPlan:
     if hasattr(viewport_source, "viewport"):
         store = viewport_source
@@ -201,11 +243,18 @@ def build_canvas_plan(
     w1, h1 = _w(display_image1), _h(display_image1)
     envelope_dims: tuple[int, int, int, int] | None = None
     envelope_hold = False
+    _boxed_dims: tuple[int, int, int, int] | None = None
 
     if is_live_default_plan and display_image1 is not None:
-        _boxed = _box_clipped_live_inputs(store, display_image1, display_image2)
+        # LIVE callers pass the already-resolved per-slot boxes (the same
+        # ``resolve_slot_boxes`` seam the upload/letterbox owner uses) — the
+        # Store's pipeline slot never carries the crop service in production.
+        _boxed = _box_clipped_live_inputs(
+            store, display_image1, display_image2, crop_boxes=crop_boxes
+        )
         if _boxed is not None:
-            display_image1, display_image2, w1, h1 = _boxed
+            display_image1, display_image2, w1, h1, w2, h2 = _boxed
+            _boxed_dims = (w1, h1, w2, h2)
 
     if is_live_default_plan and display_image1 is not None:
         # Sizing base = the comparison ENVELOPE (max(w1,w2) x max(h1,h2)), the
@@ -240,7 +289,12 @@ def build_canvas_plan(
         # ``envelope_dims`` unset so no downstream owner re-derives the mix.
         # Both sides guessing is a preview PAIR (self-consistent, today's first
         # paint); only a one-sided guess is a mix.
-        w2, h2 = _w(display_image2), _h(display_image2)
+        if _boxed_dims is not None:
+            # Box dims are the truth; the clipped views may still be lazy
+            # full-frame stores whose ``.size`` reports the uncropped frame.
+            w1, h1, w2, h2 = _boxed_dims
+        else:
+            w2, h2 = _w(display_image2), _h(display_image2)
         _src1 = source_image1 if source_image1 is not None else display_image1
         _src2 = source_image2 if source_image2 is not None else display_image2
         _sw1, _sh1 = _w(_src1), _h(_src1)
