@@ -2,8 +2,8 @@
 
 A recorded video frame holds ``store.viewport.freeze_for_export()`` — a
 ``ViewportState.clone()`` whose ``ViewState.clone()`` used to shallow-copy
-``canvas_widget_state`` (``store_viewport.py:252-259``), sharing every
-feature-state object with the live tree. Moving the loupe or toggling the
+``canvas_widget_state``, sharing every feature-state object with the live
+tree. Moving the loupe or toggling the
 diff after a frame was recorded then mutated that frame's snapshot in
 place, so the timeline's atlas could show a frame that never existed.
 
