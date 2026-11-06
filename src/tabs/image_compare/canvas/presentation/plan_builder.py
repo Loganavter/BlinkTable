@@ -252,12 +252,6 @@ def build_canvas_plan(
         _boxed = _box_clipped_live_inputs(
             store, display_image1, display_image2, crop_boxes=crop_boxes
         )
-        try:
-            from tabs.image_compare.debug import ic_preview_debug as _dbg
-
-            _dbg("live=%s boxed=%s", is_live_default_plan, None if _boxed is None else _boxed[2:])
-        except Exception:
-            pass
         if _boxed is not None:
             display_image1, display_image2, w1, h1, w2, h2 = _boxed
             _boxed_dims = (w1, h1, w2, h2)
