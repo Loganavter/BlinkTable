@@ -160,9 +160,8 @@ def test_production_live_path_sizes_the_canvas_from_the_crop_box(tmp_path, monke
     """
     from types import SimpleNamespace
 
-    from tabs.image_compare.canvas.presentation.surface import apply_store_to_canvas
-
     from engine.store.tiled_pixel_store import TiledPixelStore
+    from tabs.image_compare.canvas.presentation.surface import apply_store_to_canvas
 
     p1 = _bordered_png(tmp_path / "a.png")
     p2 = _bordered_png(tmp_path / "b.png")
