@@ -6,7 +6,7 @@ from typing import Iterable
 
 import PIL.Image
 import shiboken6 as sip
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPixmap
 from shared_toolkit.ui.themed_dialog import ThemedDialog
 from PySide6.QtWidgets import (
@@ -140,6 +140,9 @@ class ExportDialog(ThemedDialog):
         settle_on_paint(self, self._csd_settle)
 
         self._preview_source_pixmap: QPixmap | None = None
+        # Cropped variant of the preview (built by the tab when a crop window
+        # exists), kept separately so the pane can switch without a re-render.
+        self._preview_crop_pixmap: QPixmap | None = None
         # The label stretches the source itself on every paint; this gate only
         # bakes one smooth frame for the size the resize settled on. Rebuilding
         # the pixmap per resize frame is what made the pane look "killed and
@@ -167,6 +170,21 @@ class ExportDialog(ThemedDialog):
                         exc_info=True,
                     )
                     self._preview_source_pixmap = None
+
+        crop_preview = getattr(dialog_state, "crop_preview_image", None)
+        if crop_preview is not None:
+            try:
+                if isinstance(crop_preview, QPixmap):
+                    self._preview_crop_pixmap = crop_preview.copy()
+                elif isinstance(crop_preview, PIL.Image.Image):
+                    pix = self._pixmap_from_pil(crop_preview)
+                    self._preview_crop_pixmap = None if pix.isNull() else pix
+            except Exception:
+                logger.error(
+                    "Failed to convert the cropped preview to a QPixmap",
+                    exc_info=True,
+                )
+                self._preview_crop_pixmap = None
 
         self._init_ui()
         # Keyboard navigation: the dialog had no section at all (see
@@ -544,23 +562,10 @@ class ExportDialog(ThemedDialog):
 
     def _effective_preview_source(self):
         """Preview pixmap for the current state (cropped when the option is on)."""
-        source = self._preview_source_pixmap
-        rect = getattr(self.dialog_state, "crop_preview_rect", None)
-        if (
-            source is None
-            or source.isNull()
-            or rect is None
-            or not self._crop_to_image_checked()
-        ):
-            return source
-        try:
-            x, y, w, h = (int(v) for v in rect)
-        except (TypeError, ValueError):
-            return source
-        box = QRect(x, y, w, h).intersected(QRect(0, 0, source.width(), source.height()))
-        if box.isEmpty():
-            return source
-        return source.copy(box)
+        if self._crop_to_image_checked() and self._preview_crop_pixmap is not None:
+            if not self._preview_crop_pixmap.isNull():
+                return self._preview_crop_pixmap
+        return self._preview_source_pixmap
 
     def _fill_background_allowed(self) -> bool:
         """Fill only when pads exist (virtual canvas past 0..1) and format has alpha."""

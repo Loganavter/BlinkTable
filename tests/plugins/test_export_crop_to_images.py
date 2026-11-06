@@ -37,7 +37,7 @@ def _state(
     crop: bool = False,
     native: tuple[int, int] | None = (1600, 1200),
     crop_size: tuple[int, int] | None = None,
-    preview_rect: tuple[int, int, int, int] | None = None,
+    preview_image=None,
 ) -> ExportDialogState:
     return ExportDialogState(
         current_language="en",
@@ -55,7 +55,7 @@ def _state(
         crop_to_image=crop,
         crop_to_image_available=available,
         crop_native_size=crop_size,
-        crop_preview_rect=preview_rect,
+        crop_preview_image=preview_image,
     )
 
 
@@ -114,16 +114,18 @@ def test_toggling_keeps_the_scale_and_swaps_the_base(qapp):
     assert dialog.get_export_options()["crop_to_image"] is False
 
 
-def test_preview_is_cropped_only_while_the_option_is_on(qapp):
+def test_preview_switches_to_the_cropped_variant(qapp):
     source = QPixmap(100, 60)
     source.fill()
+    cropped_source = QPixmap(60, 30)
+    cropped_source.fill()
     dialog = _dialog(
-        _state(crop=False, crop_size=(60, 30), preview_rect=(10, 10, 60, 30)),
+        _state(crop=False, crop_size=(60, 30), preview_image=cropped_source),
         native=(100, 60),
         preview=source,
     )
     assert dialog._effective_preview_source().size() == source.size()
     dialog.checkbox_crop_to_image.setChecked(True)
     QApplication.processEvents()
-    cropped = dialog._effective_preview_source()
-    assert (cropped.width(), cropped.height()) == (60, 30)
+    shown = dialog._effective_preview_source()
+    assert (shown.width(), shown.height()) == (60, 30)

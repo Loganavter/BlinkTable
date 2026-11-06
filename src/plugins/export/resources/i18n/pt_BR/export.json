@@ -16,7 +16,7 @@
     "select_output_directory": "Selecionar Diretório de Saída",
     "export_first_frame": "Apenas o primeiro quadro é exportado",
     "crop_to_image": "Cortar pelas imagens",
-    "crop_to_image_tooltip": "Mantém apenas a área ocupada pelas imagens; as margens vazias são cortadas."
+    "crop_to_image_tooltip": "Exporta o conteúdo das imagens: as janelas de corte detectadas são aplicadas e as margens vazias ao redor da comparação são cortadas."
   },
   "tooltip": {
     "use_favorite": "Usar Favorito"

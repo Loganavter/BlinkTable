@@ -29,6 +29,6 @@ class ExportDialogState:
     # Native (1x) size of that image area; the resolution fields follow it while
     # the option is on, so the field keeps meaning "what will be written".
     crop_native_size: tuple[int, int] | None = None
-    # Same area in PREVIEW-raster px — the dialog crops the preview with it, so
-    # the pane shows exactly the file that will be written.
-    crop_preview_rect: tuple[int, int, int, int] | None = None
+    # Preview raster of the cropped variant — the pane switches to it with the
+    # option, so it shows exactly the file that will be written.
+    crop_preview_image: object | None = None

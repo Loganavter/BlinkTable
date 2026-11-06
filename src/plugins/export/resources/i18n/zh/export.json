@@ -16,7 +16,7 @@
     "select_output_directory": "选择输出目录",
     "export_first_frame": "仅导出第一帧",
     "crop_to_image": "按图像裁剪",
-    "crop_to_image_tooltip": "只保留图像占据的区域，空白边缘会被裁剪。"
+    "crop_to_image_tooltip": "导出图像内容：应用检测到的裁剪窗口，并裁掉对比四周的空白边缘。"
   },
   "tooltip": {
     "use_favorite": "使用收藏"

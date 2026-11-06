@@ -25,7 +25,7 @@ The export dialog: **Preview** shows the composed result before the file is writ
 - **Quality** — the compression level; it appears only for formats that store the image with loss, so a PNG or BMP export does not offer it.
 - **PNG** — the PNG compression level and the **Optimize PNG** toggle.
 - **Fill background** — fills the empty edges around the image with the **Background Color**; offered only for formats that keep transparency (PNG, TIFF, WEBP, JXL) and only while the composed result has empty edges.
-- **Crop to images** — Image Compare only: keeps the area the images occupy and trims the empty margins around it. The size fields follow the trimmed size, so they always show the file you get.
+- **Crop to images** — Image Compare only: exports the images' content. The detected crop windows are applied (black borders left out) and the empty margins around the comparison are trimmed. The size fields follow the cropped size, so they always show the file you get.
 
 ### Metadata and favorites {#metadata-and-favorites}
 
