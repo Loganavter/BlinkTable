@@ -25,6 +25,7 @@ O diálogo de exportação: a **Pré-visualização** mostra o resultado compost
 - **Qualidade** — o nível de compressão; aparece apenas em formatos que armazenam a imagem com perdas, então uma exportação em PNG ou BMP não a oferece.
 - **PNG** — o nível de compressão do PNG e a opção **Otimizar PNG**.
 - **Preencher fundo** — preenche as bordas vazias ao redor da imagem com a **Cor de Fundo**; oferecido apenas para formatos que mantêm transparência (PNG, TIFF, WEBP, JXL) e apenas enquanto o resultado composto tem bordas vazias.
+- **Cortar pelas imagens** — apenas no Image Compare: exporta o conteúdo das imagens. As janelas de corte detectadas são aplicadas (bordas pretas ficam de fora) e as margens vazias ao redor da comparação são cortadas. Os campos de tamanho seguem o tamanho cortado, então sempre mostram o arquivo que será gravado.
 
 ### Metadados e favoritos {#metadata-and-favorites}
 

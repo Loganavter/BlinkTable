@@ -410,11 +410,19 @@ def test_export_save_context_unifies_box_windows(tmp_path):
             get_crop_service=lambda: _FakeCropService([pa, pb]),
         )
         ctx = builder.build_save_context(include_preview=False)
-        assert ctx.image1_for_save.size == WINDOW
-        assert ctx.image2_for_save.size == WINDOW
-        # still bounds derive from the box-clipped sizes
-        assert ctx.native_width == WINDOW[0]
-        assert ctx.native_height == WINDOW[1]
+        # The default variant is the whole frame (today's export); the box
+        # windows live in the "crop to images" variant, which is what the option
+        # renders (and what the dialog previews).
+        assert ctx.image1_for_save.size == FULL
+        assert ctx.has_crop_variant()
+        assert ctx.crop_image1_for_save.size == WINDOW
+        assert ctx.crop_image2_for_save.size == WINDOW
+        assert ctx.crop_native_size == WINDOW
+        selected = ctx.select({"crop_to_image": True})
+        assert selected.image1_for_save.size == WINDOW
+        assert selected.image2_for_save.size == WINDOW
+        assert selected.render_plan is ctx.crop_plan
+        assert (selected.native_width, selected.native_height) == WINDOW
 
         plain = ExportContextBuilder(
             store, gpu_export_service=None, state_coordinator=state

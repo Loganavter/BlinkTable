@@ -212,10 +212,19 @@ class ExportService:
             progress_callback(25)
 
         img_to_save = final_img
+        if bool(export_options.get("crop_to_image", False)):
+            # Trim to the image area (virtual-canvas pads / letterbox dropped).
+            # Done before the fill so a requested fill only reaches transparency
+            # INSIDE the kept area; a no-op rect returns the frame untouched.
+            from tabs.image_compare.services.image_export.content_crop import (
+                crop_to_plan_content,
+            )
+
+            img_to_save = crop_to_plan_content(final_img, current_render_plan)
         if export_options.get("fill_background", False):
             bg_color_tuple = export_options.get("background_color")
             if bg_color_tuple:
-                img_to_save = self.apply_background_fill(final_img, bg_color_tuple)
+                img_to_save = self.apply_background_fill(img_to_save, bg_color_tuple)
 
         target_format = export_options.get("format", "PNG").upper()
         pil_format = "JPEG" if target_format == "JPG" else target_format

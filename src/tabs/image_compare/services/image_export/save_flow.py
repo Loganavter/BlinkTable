@@ -94,6 +94,12 @@ class ExportSaveFlowCoordinator:
         save_ctx,
         export_opts: dict,
     ) -> None:
+        # "Crop to images" was chosen in the dialog: hand the worker the cropped
+        # variant (its own plan/store/pair), never the full one it toggled off.
+        select = getattr(save_ctx, "select", None)
+        if callable(select):
+            save_ctx = select(export_opts)
+
         def worker_factory(cancel_event: threading.Event):
             return GenericWorker(
                 self._export_worker_task,
