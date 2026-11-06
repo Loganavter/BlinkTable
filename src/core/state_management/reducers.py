@@ -105,8 +105,11 @@ class ViewStateReducer:
             "UPDATE_CANVAS_FEATURE_STATE",
         ):
             # Shallow dict copy — no deepcopy (removed from critical section).
-            # Feature states are immutable, so sharing values is safe and the
-            # copy itself is prepared outside Dispatcher._lock.
+            # Live-to-live only: the derived ViewState deliberately shares the
+            # OTHER features' mutable state objects; copying every feature on
+            # every action is not free and dispatch runs off the lock.
+            # Snapshot freeze is a different path: ``ViewState.clone()`` copies
+            # each value, because a recorded frame must not follow live edits.
             current = dict(getattr(view_state, "canvas_widget_state", None) or {})
             if current.get(feature_name) is feature_state:
                 return view_state

@@ -250,12 +250,19 @@ class ViewState:
     text_bg_visual_width: float = 0.0
 
     def clone(self):
-        # Long-term Store lock fix: avoid heavy deepcopy inside the critical
-        # section. ``canvas_widget_state`` values are immutable feature states,
-        # so a shallow dict copy is sufficient and keeps the prepare step
-        # cheap. Deepcopy (if ever needed) is done outside Dispatcher._lock.
+        # CONTENT IDENTITY: ``canvas_widget_state`` values are MUTABLE feature
+        # states (magnifier models, enabled/active ids, overlay layouts) that
+        # live canvas code mutates in place. A shallow dict copy aliases them,
+        # so ``freeze_for_export()`` — a recorded video frame — would keep
+        # following later live edits and the timeline could show a frame that
+        # never existed. Copy each value; never share on failure (fail closed:
+        # an uncopyable value raises instead of silently aliasing).
+        # Runs outside ``Dispatcher._lock`` (dispatcher.py:304) and matches the
+        # whole-dict deepcopy in store_workspace.py:90.
         new_obj = copy.copy(self)
-        new_obj.canvas_widget_state = dict(self.canvas_widget_state)
+        new_obj.canvas_widget_state = {
+            key: copy.deepcopy(value) for key, value in self.canvas_widget_state.items()
+        }
         return new_obj
 
 class ViewportState:

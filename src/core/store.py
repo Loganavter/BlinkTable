@@ -37,7 +37,7 @@ class Store(WorkspaceStoreMixin, StoreOperationsMixin):
 
     Long-term Store lock fix (plan_image_compare_dnd_tiles.md): Dispatcher
     prepares new_viewport / new_slots copies (including ViewState
-    ViewportState cloning and shallow dict copies of canvas_widget_state)
+    ViewportState cloning and per-value copies of canvas_widget_state)
     *outside* Dispatcher._lock. The critical section only does ``is``
     identity comparison and an atomic pointer swap plus history. This keeps
     deepcopy / dict-copy work off the lock and preserves the reentrant-safe
