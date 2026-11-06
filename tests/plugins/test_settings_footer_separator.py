@@ -40,7 +40,17 @@ def test_the_footer_is_separated_from_the_page(qapp):
         from sli_ui_toolkit.ui.widgets.composite.dialog_shell import _DialogHairline
 
         assert isinstance(separator, _DialogHairline)
-        assert separator.parent() is dialog.shell.content_area
+        # Toolkit #147/#149 moved the hairline into the shell's own RULE ROW:
+        # a flush QLayout (a fresh one takes the style's ~9 px margins) so the
+        # rule reaches the splitter column, and the column itself stays flush
+        # so it reaches both edges. Assert the contract, not the old parent.
+        rule_row = getattr(dialog.shell, "_rule_row", None)
+        assert rule_row is not None, "the shell has no rule row for the footer rule"
+        assert separator.parent() is rule_row
+        rule_layout = rule_row.layout()
+        assert rule_layout is not None, "the footer rule's row has no layout"
+        assert rule_layout.contentsMargins().left() == 0
+        assert rule_layout.contentsMargins().right() == 0
         assert dialog.shell.content_layout.contentsMargins().left() == 0
         assert dialog.shell.content_layout.contentsMargins().right() == 0
         assert separator.height() >= 1
