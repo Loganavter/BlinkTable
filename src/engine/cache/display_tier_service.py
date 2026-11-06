@@ -49,6 +49,7 @@ from ui.canvas_infra.viewport.focus import (
     capture_letterbox_focus,
     restore_letterbox_focus,
 )
+from ui.canvas_presentation.plan import plan_owns_overlay_state
 
 if TYPE_CHECKING:  # pragma: no cover - annotation only, no runtime import
     from PySide6.QtGui import QImage
@@ -1197,7 +1198,16 @@ def rebind_plan_store(canvas, store) -> None:
 
 
 def apply_overlays(canvas, plan, *, store, hooks: LegacyPlanHooks) -> None:
-    if store is None:
+    # ``plan.overlay_layout is not None`` ⇒ the plan owns the overlay state
+    # (a recorded/snapshot plan — export, video preview — carried through
+    # as-is). Apply its own guide/capture params and skip the live recompute:
+    # ``apply_feature_live_runtime_overlays`` re-derives the overlay from the
+    # LIVE store and replaces it — or, when it cannot build a layout, nulls
+    # it. The store still gets bound (``sync_geometry_state``) because
+    # interaction needs it. A plan WITHOUT an overlay layout keeps today's
+    # live path exactly (see ``plan_owns_overlay_state``).
+    plan_owns_overlay = plan_owns_overlay_state(plan)
+    if store is None or plan_owns_overlay:
         canvas.set_guides_params(
             plan.guides_enabled,
             plan.guides_color,
@@ -1209,7 +1219,8 @@ def apply_overlays(canvas, plan, *, store, hooks: LegacyPlanHooks) -> None:
 
     if store is not None:
         sync_geometry_state(canvas, store, hooks=hooks)
-        hooks.apply_feature_live_runtime_overlays(store, canvas)
+        if not plan_owns_overlay:
+            hooks.apply_feature_live_runtime_overlays(store, canvas)
 
 
 def textures_are_current(canvas, plan: CanvasRenderPlan) -> bool:

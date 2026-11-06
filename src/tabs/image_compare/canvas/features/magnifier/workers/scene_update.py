@@ -30,7 +30,10 @@ from tabs.image_compare.canvas.features.magnifier.state.store import active_or_d
 from ui.canvas_infra.scene.apply import apply_scene_to_canvas
 from ui.canvas_infra.scene.builder import build_canvas_scene
 from ui.canvas_infra.scene.pass_contract import SceneVisibility
-from ui.canvas_presentation.plan import resolve_plan_logical_image_rect
+from ui.canvas_presentation.plan import (
+    plan_owns_overlay_state,
+    resolve_plan_logical_image_rect,
+)
 from tabs.image_compare.canvas.helpers import reset_canvas_overlays
 
 from tabs.image_compare.canvas.features.magnifier.workers.common import (
@@ -412,6 +415,24 @@ def rebuild_magnifier_overlay(presenter, frame_context=None):
         )
         _mark("build_layout")
         if layout is None:
+            if plan_owns_overlay_state(plan):
+                # The live rebuild could not build a layout, but the incoming
+                # plan already carries one (recorded snapshot / video-preview
+                # plan). Never null it and never hand the canvas to
+                # ``reset_canvas_overlays``: an overlay the live path did not
+                # build is not the live path's to clear. The scene apply above
+                # half-cleared the applied GPU overlay (quads/capture/guides),
+                # so re-apply the plan's own layout from a clean slate.
+                image_label.clear_feature_overlay_gpu()
+                apply_magnifier_plan_overlay(image_label, plan)
+                trace_loupe(
+                    frame_context,
+                    "loupe.scene_layout_unavailable_plan_kept",
+                    "skipped",
+                    "live layout build returned None; kept the plan-carried"
+                    f" overlay_layout slots={len(plan.overlay_layout.slots)}",
+                )
+                return
             image_label._active_render_plan = _dc_replace(plan, overlay_layout=None)
             reset_canvas_overlays(image_label)
             return
