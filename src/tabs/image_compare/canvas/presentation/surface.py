@@ -38,6 +38,21 @@ def apply_store_to_canvas(
         else presentation.display_cache_key
     )
 
+    # Crop boxes resolve through the canvas layer's single seam, exactly like
+    # the upload/letterbox owner (``display_tier_service`` hooks). The Store's
+    # pipeline slot does NOT carry the crop service in production (it holds the
+    # reducer-owned pixel/preview/unify mirrors), so a plan built from the slot
+    # alone kept the uncropped source aspect as its canvas basis while the
+    # letterbox fitted the box — cropping black areas never refitted the
+    # comparison (owner report 2026-11-06). ``resolve_slot_boxes`` is a per-frame
+    # dict hit on a warmed service and kicks a warmup otherwise, exactly like the
+    # upload path one frame earlier.
+    try:
+        from tabs.image_compare.canvas.texture_parts.crop_clip import resolve_slot_boxes
+
+        crop_boxes = resolve_slot_boxes(canvas) if canvas is not None else None
+    except Exception:
+        crop_boxes = None
     plan = build_canvas_plan(
         store,
         display_image1,
@@ -47,6 +62,7 @@ def apply_store_to_canvas(
         source_key=source_key,
         display_cache_key=display_cache_key,
         preserve_zoom=True,
+        crop_boxes=crop_boxes,
     )
 
     if getattr(plan, "envelope_hold", False):
