@@ -64,6 +64,18 @@ def apply_store_to_canvas(
         preserve_zoom=True,
         crop_boxes=crop_boxes,
     )
+    try:
+        from tabs.image_compare.debug import ic_preview_debug as _dbg
+
+        _dbg(
+            "plan crop_boxes=%s canvas=%s dims=%sx%s",
+            crop_boxes,
+            type(canvas).__name__,
+            getattr(plan, "canvas_w", None),
+            getattr(plan, "canvas_h", None),
+        )
+    except Exception:
+        pass
 
     if getattr(plan, "envelope_hold", False):
         # One side's own source tier is still decoding and only its PREVIEW

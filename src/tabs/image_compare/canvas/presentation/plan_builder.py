@@ -132,14 +132,26 @@ def _box_clipped_live_inputs(store, display_image1, display_image2, crop_boxes=N
         )
     except Exception:
         return None
-    w, h = box_dims(box1, live1)
+    w1, h1 = box_dims(box1, live1)
+    if box2 is not None:
+        w2, h2 = box_dims(box2, live2)
+    else:
+        try:
+            w2, h2 = int(live2[0]), int(live2[1])
+        except Exception:
+            w2, h2 = 0, 0
     try:
-        w, h = int(w), int(h)
+        w1, h1, w2, h2 = int(w1), int(h1), int(w2), int(h2)
     except Exception:
         return None
-    if w <= 0 or h <= 0:
+    if w1 <= 0 or h1 <= 0:
         return None
-    return (clipped1, clipped2, w, h)
+    # BOTH sides' box dims travel with the clipped views: a lazy
+    # ``TiledPixelStore`` is returned unclipped by ``clip_image_for_upload``
+    # (tiles crop on residency), so its ``.size`` still reports the FULL frame —
+    # re-reading it downstream re-inflated the canvas basis to the uncropped
+    # aspect even though the box had been found.
+    return (clipped1, clipped2, w1, h1, w2, h2)
 
 def build_canvas_plan(
     viewport_source,
@@ -231,6 +243,7 @@ def build_canvas_plan(
     w1, h1 = _w(display_image1), _h(display_image1)
     envelope_dims: tuple[int, int, int, int] | None = None
     envelope_hold = False
+    _boxed_dims: tuple[int, int, int, int] | None = None
 
     if is_live_default_plan and display_image1 is not None:
         # LIVE callers pass the already-resolved per-slot boxes (the same
@@ -239,8 +252,15 @@ def build_canvas_plan(
         _boxed = _box_clipped_live_inputs(
             store, display_image1, display_image2, crop_boxes=crop_boxes
         )
+        try:
+            from tabs.image_compare.debug import ic_preview_debug as _dbg
+
+            _dbg("live=%s boxed=%s", is_live_default_plan, None if _boxed is None else _boxed[2:])
+        except Exception:
+            pass
         if _boxed is not None:
-            display_image1, display_image2, w1, h1 = _boxed
+            display_image1, display_image2, w1, h1, w2, h2 = _boxed
+            _boxed_dims = (w1, h1, w2, h2)
 
     if is_live_default_plan and display_image1 is not None:
         # Sizing base = the comparison ENVELOPE (max(w1,w2) x max(h1,h2)), the
@@ -275,7 +295,12 @@ def build_canvas_plan(
         # ``envelope_dims`` unset so no downstream owner re-derives the mix.
         # Both sides guessing is a preview PAIR (self-consistent, today's first
         # paint); only a one-sided guess is a mix.
-        w2, h2 = _w(display_image2), _h(display_image2)
+        if _boxed_dims is not None:
+            # Box dims are the truth; the clipped views may still be lazy
+            # full-frame stores whose ``.size`` reports the uncropped frame.
+            w1, h1, w2, h2 = _boxed_dims
+        else:
+            w2, h2 = _w(display_image2), _h(display_image2)
         _src1 = source_image1 if source_image1 is not None else display_image1
         _src2 = source_image2 if source_image2 is not None else display_image2
         _sw1, _sh1 = _w(_src1), _h(_src1)

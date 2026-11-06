@@ -162,11 +162,16 @@ def test_production_live_path_sizes_the_canvas_from_the_crop_box(tmp_path, monke
 
     from tabs.image_compare.canvas.presentation.surface import apply_store_to_canvas
 
+    from engine.store.tiled_pixel_store import TiledPixelStore
+
     p1 = _bordered_png(tmp_path / "a.png")
     p2 = _bordered_png(tmp_path / "b.png")
     svc = _warmed_service(p1, p2)
-    disp1 = Image.open(p1).convert("RGBA")
-    disp2 = Image.open(p2).convert("RGBA")
+    # Production display tier: a lazy FULL-FRAME store whose ``.size`` reports
+    # the uncropped frame (tiles crop on residency, not at decode).
+    disp1 = TiledPixelStore.from_pil(Image.open(p1).convert("RGBA"), tmp_dir=str(tmp_path))
+    disp2 = TiledPixelStore.from_pil(Image.open(p2).convert("RGBA"), tmp_dir=str(tmp_path))
+    assert get_image_dims(disp1) == FULL
     # No ``crop_service`` on the pipeline slot — exactly what the app builds.
     store = _make_store(p1, p2, disp1, disp2)
     canvas = SimpleNamespace(
@@ -182,8 +187,8 @@ def test_production_live_path_sizes_the_canvas_from_the_crop_box(tmp_path, monke
     apply_store_to_canvas(canvas, store, disp1, disp2)
 
     plan = captured["plan"]
+    # The canvas basis follows the box even though the lazy store still says
+    # FULL — re-reading the tier's own size here was the regression.
     assert (plan.canvas_w, plan.canvas_h) == BOX_DIMS
     assert (plan.canvas_w, plan.canvas_h) != FULL
-    assert get_image_dims(plan.image1) == BOX_DIMS
-    assert get_image_dims(plan.image2) == BOX_DIMS
     assert tuple(store.runtime_cache.overlay_clip_rect) == (0, 0, *BOX_DIMS)
