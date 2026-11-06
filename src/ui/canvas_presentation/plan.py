@@ -157,6 +157,25 @@ class CanvasRenderPlan:
     that set it must pass a real ``CompositionPlan``.
     """
 
+def plan_owns_overlay_state(plan) -> bool:
+    """``plan.overlay_layout is not None`` ⇒ the plan owns the overlay state.
+
+    A recorded/snapshot plan (export, video-preview) carries the overlay
+    geometry it was rendered with: its loupe slots, diff mode, capture
+    circles, guide sets and guide/capture params. Applying such a plan must
+    not run the live overlay recompute — that path re-derives the overlay
+    from the *live* store and, when it cannot build a layout, nulls what the
+    plan carried (``scene_update.rebuild_magnifier_overlay``).
+
+    A plan WITHOUT an overlay layout (the overlay was off when it was built)
+    keeps the live recompute exactly as before. Shared by the engine plan
+    applicator and the tab's magnifier live rebuild, so both sides read the
+    same rule; ``src/engine`` may import ``ui.*`` (the seal forbids only
+    ``tabs.*`` / ``plugins.*`` / ``core.store``).
+    """
+    return getattr(plan, "overlay_layout", None) is not None
+
+
 def resolve_plan_logical_image_rect(
     plan: CanvasRenderPlan,
 ) -> tuple[int, int, int, int]:
