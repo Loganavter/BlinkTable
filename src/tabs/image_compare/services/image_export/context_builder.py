@@ -121,28 +121,12 @@ class ExportContextBuilder:
         except Exception:
             return None, None
 
-    def build_save_context(self, include_preview: bool = True) -> ExportSaveContext:
-        original1_full = self._peek_slot(1)
-        original2_full = self._peek_slot(2)
-        if not original1_full or not original2_full:
-            raise ValueError("Full resolution images are not available for saving.")
+    def _build_variant(self, original1_full, original2_full, *, include_preview: bool):
+        """One save variant: pair, plan, render store, preview, native size.
 
-        # W3c: export operates on the crop windows (black borders excluded),
-        # sourced from the full-frame stores above (never baked at decode).
-        # Both boxes None → views are the originals, identical to today.
-        # Forwarded originals are the cropped views so a later size-override
-        # rebuild unifies the same windows the plan was built from.
-        from tabs.image_compare.services.analysis.analysis_pair import (
-            crop_pair_to_boxes,
-        )
-
-        box1, box2 = self._resolve_export_boxes()
-        original1_full, original2_full = crop_pair_to_boxes(
-            original1_full, original2_full, box1, box2
-        )
-        if not original1_full or not original2_full:
-            raise ValueError("Full resolution images are not available for saving.")
-
+        ``original1_full``/``original2_full`` are already the window the variant
+        exports (full frame, or the crop windows for "crop to images").
+        """
         live_snapshot = build_live_frame_snapshot(self.store)
         resize_method = get_effective_export_interpolation_method(
             live_snapshot.viewport_state
@@ -202,18 +186,69 @@ class ExportContextBuilder:
         plan = prepared_frame.plan
         native_w = int(getattr(plan, "canvas_w", 0) or image1_for_save.width)
         native_h = int(getattr(plan, "canvas_h", 0) or image1_for_save.height)
+        return {
+            "original1_full": original1_full,
+            "original2_full": original2_full,
+            "image1_for_save": image1_for_save,
+            "image2_for_save": image2_for_save,
+            "plan": plan,
+            "store": prepared_frame.store,
+            "preview": preview_img,
+            "native": (native_w, native_h),
+            "virtual_canvas_active": bool(global_bounds.extends_beyond_unit()),
+        }
+
+    def build_save_context(self, include_preview: bool = True) -> ExportSaveContext:
+        original1_full = self._peek_slot(1)
+        original2_full = self._peek_slot(2)
+        if not original1_full or not original2_full:
+            raise ValueError("Full resolution images are not available for saving.")
+
+        # Full variant = today's export (the whole frame, pads included).
+        full = self._build_variant(
+            original1_full, original2_full, include_preview=include_preview
+        )
+
+        # "Crop to images" variant: the pair cropped to the effective crop
+        # windows (what the live canvas shows; black borders excluded), built
+        # only when a window exists. Rendered on its own so the preview the user
+        # toggles onto is the file that will be written — the cropped pair is a
+        # different composition (per-side windows), so a raster crop of the full
+        # frame is not equivalent.
+        crop = None
+        box1, box2 = self._resolve_export_boxes()
+        if box1 is not None or box2 is not None:
+            from tabs.image_compare.services.analysis.analysis_pair import (
+                crop_pair_to_boxes,
+            )
+
+            c1, c2 = crop_pair_to_boxes(original1_full, original2_full, box1, box2)
+            if c1 is not None and c2 is not None:
+                try:
+                    crop = self._build_variant(c1, c2, include_preview=include_preview)
+                except Exception:
+                    crop = None
+
         return ExportSaveContext(
-            original1_full=original1_full,
-            original2_full=original2_full,
-            image1_for_save=image1_for_save,
-            image2_for_save=image2_for_save,
-            render_plan=plan,
-            render_store=prepared_frame.store,
-            preview_img=preview_img,
+            original1_full=full["original1_full"],
+            original2_full=full["original2_full"],
+            image1_for_save=full["image1_for_save"],
+            image2_for_save=full["image2_for_save"],
+            render_plan=full["plan"],
+            render_store=full["store"],
+            preview_img=full["preview"],
             suggested_filename=self.state.build_suggested_export_filename(),
-            native_width=native_w,
-            native_height=native_h,
-            virtual_canvas_active=bool(global_bounds.extends_beyond_unit()),
+            native_width=full["native"][0],
+            native_height=full["native"][1],
+            virtual_canvas_active=full["virtual_canvas_active"],
+            crop_native_size=(crop["native"] if crop else None),
+            crop_plan=(crop["plan"] if crop else None),
+            crop_store=(crop["store"] if crop else None),
+            crop_image1_for_save=(crop["image1_for_save"] if crop else None),
+            crop_image2_for_save=(crop["image2_for_save"] if crop else None),
+            crop_original1=(crop["original1_full"] if crop else None),
+            crop_original2=(crop["original2_full"] if crop else None),
+            crop_preview_img=(crop["preview"] if crop else None),
         )
 
     def _downscale_for_preview(

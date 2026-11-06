@@ -71,6 +71,9 @@ class ExportStateCoordinator:
                 getattr(settings, "export_png_compress_level", 9) or 9
             ),
             fill_background=bool(getattr(settings, "export_fill_background", False)),
+            crop_to_image=bool(
+                getattr(settings, "export_crop_to_image", False)
+            ),
             background_color=getattr(settings, "export_background_color", None),
             comment_text=getattr(settings, "export_comment_text", "") or "",
             comment_keep_default=bool(
@@ -120,6 +123,9 @@ class ExportStateCoordinator:
             settings.export_fill_background = bool(
                 export_opts.get("fill_background", False)
             )
+        settings.export_crop_to_image = bool(
+            export_opts.get("crop_to_image", False)
+        )
         bg_color = export_opts.get("background_color")
         settings.export_background_color = (
             self.color_from_tuple(bg_color) if bg_color else self.default_bg_color()
@@ -169,6 +175,9 @@ class ExportStateCoordinator:
                 self.store.settings,
                 "export_fill_background",
                 False,
+            ),
+            "crop_to_image": bool(
+                getattr(self.store.settings, "export_crop_to_image", False)
             ),
             "background_color": bg_color_tuple,
             "png_compress_level": getattr(

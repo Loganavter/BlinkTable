@@ -62,10 +62,28 @@ class ExportPresenter(QObject):
             main_controller=main_controller,
             main_window_app=main_window_app,
         )
+        # The export context needs the session crop service for its cropped
+        # variant ("crop to images" = what the live canvas shows). Late-bound on
+        # purpose: the presenters are built before every collaborator exists,
+        # and `resolve_session_controller` resolves the tab session through
+        # `main_controller.sessions` at call time (single choke point, never
+        # raises).
+        def _get_crop_service():
+            from tabs.image_compare.pipeline.session import resolve_session_controller
+
+            ctrl = resolve_session_controller(self)
+            if ctrl is None:
+                return None
+            try:
+                return ctrl._get_crop_service()
+            except Exception:
+                return None
+
         self.context_builder = ExportContextBuilder(
             store=store,
             gpu_export_service=self.gpu_export_service,
             state_coordinator=self.state,
+            get_crop_service=_get_crop_service,
         )
         self.save_flow = ExportSaveFlowCoordinator(
             store=store,
@@ -152,6 +170,8 @@ class ExportPresenter(QObject):
                 save_ctx.suggested_filename,
                 native_size=(save_ctx.native_width, save_ctx.native_height),
                 virtual_canvas_active=bool(save_ctx.virtual_canvas_active),
+                crop_native_size=getattr(save_ctx, "crop_native_size", None),
+                crop_preview_image=getattr(save_ctx, "crop_preview_img", None),
                 on_finished=lambda code, options: self._start_save_after_dialog(
                     save_ctx, code, options
                 ),
@@ -201,10 +221,16 @@ class ExportPresenter(QObject):
         native_size=None,
         *,
         virtual_canvas_active: bool = True,
+        crop_native_size=None,
+        crop_preview_image=None,
         on_finished=None,
     ):
         dialog_state = self.state.build_export_dialog_state()
         dialog_state.virtual_canvas_active = bool(virtual_canvas_active)
+        # Image Compare is the tab that owns a cropped variant of the export.
+        dialog_state.crop_to_image_available = True
+        dialog_state.crop_native_size = crop_native_size
+        dialog_state.crop_preview_image = crop_preview_image
         return self.ui_manager.dialogs.show_export_dialog(
             dialog_state,
             preview_img,
