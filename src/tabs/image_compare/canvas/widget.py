@@ -42,6 +42,7 @@ from .render_context import (
 )
 from ui.canvas_infra.rhi.rhi_backend import configure_rhi_widget
 from ui.canvas_infra.rhi.rhi_render import render_clear_frame
+from ui.canvas_presentation.plan import plan_owns_overlay_state
 from engine.gpu.coalesced_flush import CoalescedFlush
 from engine.gpu.glass_panel import GlassPanelRegistry
 from .rhi_renderer import RhiCanvasRenderer
@@ -153,7 +154,14 @@ class CanvasWidget(QRhiWidget):
             apply_channel_mode_in_shader=state._apply_channel_mode_in_shader,
         )
         plan = getattr(self, "_active_render_plan", None)
-        if plan is not None:
+        # A plan that carries its overlay_layout owns that overlay state
+        # (recorded snapshot / video-preview plan). This flush must not
+        # re-derive it from the live store: that path replaces the plan and,
+        # when it cannot build a layout, nulls the overlay and resets the
+        # canvas. Same rule as the engine plan applicator and the magnifier
+        # live rebuild (PR #83, ``plan_owns_overlay_state``); a plan WITHOUT an
+        # overlay layout keeps the live recompute exactly as before.
+        if plan is not None and not plan_owns_overlay_state(plan):
             from tabs.image_compare.canvas.registry import registry
 
             registry().apply_feature_live_runtime_overlays(state._store, self)
