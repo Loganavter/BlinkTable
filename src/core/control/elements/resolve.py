@@ -12,6 +12,7 @@ import difflib
 import time
 from typing import Any
 
+from PySide6.QtCore import QPoint
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QWidget
 
@@ -31,6 +32,84 @@ from .roles import _label_of, _role_of
 #: reference live-only tools accept in the same ``id`` position as an
 #: inventory id, so an agent need not hold a positional child-index path.
 PROPERTY_PREFIX = "property:"
+
+#: Prefix of a screen-point reference (``point:<x>,<y>``). Same ``id`` slot:
+#: it names the widget a real pointer at that global point would reach, so a
+#: verb can act on a widget the inventory never registered (a paint-only
+#: timeline band, a mouse-transparent overlay) without the control layer
+#: naming a tab or widget class.
+POINT_PREFIX = "point:"
+
+
+def _parse_point_needle(needle: str) -> QPoint | None:
+    """``point:<x>,<y>`` → ``QPoint`` (global screen), else ``None``.
+
+    Malformed (no comma, empty/float/non-numeric halves) is a named error
+    immediately: it can never start matching later, and a wheel silently aimed
+    at a typo'd position would be blamed on the widget.
+    """
+    if not needle.startswith(POINT_PREFIX):
+        return None
+    body = needle[len(POINT_PREFIX) :].strip()
+    x_text, separator, y_text = body.partition(",")
+    try:
+        if not separator:
+            raise ValueError("no comma")
+        return QPoint(int(x_text.strip()), int(y_text.strip()))
+    except (ValueError, OverflowError):
+        raise MethodError(
+            f"point target is malformed (needs x,y): {needle!r}",
+            "point:<x>,<y> takes INTEGER global screen coordinates, "
+            "e.g. point:640,480 — the space a ui_elements row's screen_rect is in",
+        ) from None
+
+
+def _window_bounds_hint() -> str:
+    """Visible top-level windows as ``key=[x, y, w, h]`` (global), for a miss."""
+    windows = _top_level_widgets()
+    bounds: list[str] = []
+    for window, key in zip(windows, _window_keys(windows)):
+        try:
+            if not window.isVisible():
+                continue
+            rect = window.frameGeometry()
+        except Exception:
+            continue
+        bounds.append(
+            f"{key}=[{rect.x()}, {rect.y()}, {rect.width()}, {rect.height()}]"
+        )
+    return "; ".join(bounds) if bounds else "no visible windows"
+
+
+def _element_at_point(point: QPoint) -> Element:
+    """The ``Element`` for the widget a real pointer at global *point* reaches.
+
+    One attempt, no retry budget: a point is not an id that gets realized later
+    — if no live window covers it, the caller needs the live window bounds (and
+    a fresh ``ui_elements``) rather than three seconds of the same miss.
+    """
+    from .interaction import widget_at_global
+
+    widget = widget_at_global(point)
+    if widget is None or not widget.isVisible():
+        raise MethodError(
+            f"no widget at point ({point.x()}, {point.y()})",
+            "point:<x>,<y> takes GLOBAL screen coordinates — the space of a "
+            "ui_elements row's screen_rect (add a widget-local offset from rect "
+            "to it); no live window covers that point. Live windows: "
+            + _window_bounds_hint(),
+        )
+    return _make_element(
+        widget=widget,
+        element_id=f"{POINT_PREFIX}{point.x()},{point.y()}",
+        role=_role_of(widget) or "widget",
+        label=_label_of(widget, None),
+        rect=widget.rect(),
+        window=_window_key_for(widget),
+        surface="popup" if _is_popup_window(widget.window()) else "window",
+        action=None,
+        point=point,
+    )
 
 
 def _parse_property_needle(needle: str) -> tuple[str, str] | None:
@@ -139,11 +218,17 @@ def resolve_element(
 ) -> Element:
     """Resolve *needle* to an element, retrying until the UI realizes it.
 
-    *needle* is an inventory id, ``@<action id>``, or a stable property
+    *needle* is an inventory id, ``@<action id>``, a stable property
     reference ``property:<name>=<value>`` (e.g.
-    ``property:gallery_path=/gallery/card_0.png``). The property form matches
-    the element's own ``properties`` bag, so it survives tree reordering that
-    changes positional ids; the first match in tree order wins.
+    ``property:gallery_path=/gallery/card_0.png``), or a screen-point
+    reference ``point:<x>,<y>``. The property form matches the element's own
+    ``properties`` bag, so it survives tree reordering that changes positional
+    ids; the first match in tree order wins. The point form resolves the widget
+    a real pointer at that **global** point (the space of ``screen_rect``)
+    would reach, via ``QApplication.widgetAt``, so a widget the inventory never
+    lists — a paint-only timeline band, a mouse-transparent overlay — is
+    addressable without naming a tab or class; it does not retry (a miss means
+    no live window covers the point).
 
     Raises ``MethodError`` (with close matches + a ``ui_elements`` hint) when
     the id never appears within the retry budget. The event loop is pumped
@@ -156,6 +241,9 @@ def resolve_element(
             "ui_* needs a non-empty 'id'",
             "call ui_elements and pass one of the returned ids verbatim",
         )
+    point_needle = _parse_point_needle(needle)
+    if point_needle is not None:
+        return _element_at_point(point_needle)
     property_needle = _parse_property_needle(needle)
     budget = package.RETRY_TIMEOUT_MS if timeout_ms is None else int(timeout_ms)
     step = int(getattr(package, "RETRY_STEP_MS", 25))
