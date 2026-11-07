@@ -1,9 +1,15 @@
-"""In-process pointer delivery at an element's centre (no OS-level injection).
+"""In-process pointer delivery at an element's position (no OS-level injection).
 
 ``QTest``/``QApplication.sendEvent`` on the GUI thread, exactly where a real
 input event lands. A user right-click is a mouse press/release *and* a
 context-menu event, so :func:`click_element` delivers both — a widget that acts
 on the mouse path and one that uses ``CustomContextMenu`` behave identically.
+
+An element resolved from a ``point:<x>,<y>`` reference is the widget a real
+pointer at that global point reaches, and its events land there; inventory
+rows keep the historical centre convention. A point-addressed wheel goes to
+that widget first and only falls through to the owning ``QAbstractScrollArea``
+when the widget ignores it (see :func:`wheel_element`).
 """
 
 from __future__ import annotations
@@ -36,6 +42,40 @@ def _send_context_menu(widget: QWidget, pos: QPoint) -> None:
     QApplication.sendEvent(widget, event)
 
 
+def widget_at_global(point: QPoint) -> QWidget | None:
+    """The widget a real pointer at global *point* would reach, or ``None``.
+
+    ``QApplication.widgetAt`` is the same hit test the platform layer uses: it
+    descends the top-level under the point in z-order, skipping children marked
+    ``WA_TransparentForMouseEvents`` (a paint-only overlay is exactly that, and
+    a wheel aimed at it must land on the widget behind it) and returns ``None``
+    when no live window covers the point. Global screen coordinates are the
+    space a ``ui_elements`` row's ``screen_rect`` is in.
+    """
+    try:
+        widget = QApplication.widgetAt(point)
+    except Exception:
+        return None
+    return widget if isinstance(widget, QWidget) else None
+
+
+def _element_local_pos(element: Element, widget: QWidget) -> QPoint:
+    """Event position for *element* inside *widget*.
+
+    An element resolved from a ``point:<x>,<y>`` reference carries that global
+    point and a pointer event must land there (a widget may zoom around the
+    cursor, not its centre). Inventory rows carry no point and keep the
+    historical widget-local centre.
+    """
+    point = getattr(element, "point", None)
+    if point is not None:
+        try:
+            return widget.mapFromGlobal(point)
+        except Exception:
+            pass
+    return element.rect.center()
+
+
 def click_element(element: Element, *, button: str = "left", count: int = 1) -> None:
     """Deliver a click to *element* in-process, at its widget-local centre."""
     qt_button = _BUTTONS.get(str(button).lower())
@@ -48,7 +88,7 @@ def click_element(element: Element, *, button: str = "left", count: int = 1) -> 
     except (TypeError, ValueError):
         clicks = 1
     widget = element.widget
-    pos = element.rect.center()
+    pos = _element_local_pos(element, widget)
     if clicks == 2:
         QTest.mouseDClick(widget, qt_button, pos=pos)
         if qt_button == Qt.MouseButton.RightButton:
@@ -63,7 +103,7 @@ def click_element(element: Element, *, button: str = "left", count: int = 1) -> 
 def hover_element(element: Element) -> None:
     """Move the pointer over *element* and deliver a real enter event."""
     widget = element.widget
-    pos = element.rect.center()
+    pos = _element_local_pos(element, widget)
     try:
         QTest.mouseMove(widget, pos)
     except Exception:
@@ -143,6 +183,35 @@ _WHEEL_PHASES = {
 }
 
 
+def _send_wheel(
+    widget: QWidget,
+    element: Element,
+    *,
+    delta: int,
+    phase: Qt.ScrollPhase,
+    modifiers: Qt.KeyboardModifier,
+) -> bool:
+    """Send one wheel event at *element*'s position and report if it was taken.
+
+    The event is re-created per receiver because delivery may be attempted on
+    two widgets (the hit widget, then its owning scroll area) and one event
+    object carries the first receiver's accepted state.
+    """
+    pos = _element_local_pos(element, widget)
+    event = QWheelEvent(
+        QPointF(pos),
+        QPointF(widget.mapToGlobal(pos)),
+        QPoint(0, 0),
+        QPoint(0, int(delta)),
+        Qt.MouseButton.NoButton,
+        modifiers,
+        phase,
+        False,
+    )
+    QApplication.sendEvent(widget, event)
+    return bool(event.isAccepted())
+
+
 def wheel_element(
     element: Element,
     *,
@@ -159,6 +228,18 @@ def wheel_element(
     and smooth-scroll compositors send). High-resolution wheels mark every
     event ``begin``, which is the stream that used to starve the scroll glide
     — this verb is how a caller reproduces it without a physical device.
+
+    An **id-addressed** element is routed straight to the owning
+    ``QAbstractScrollArea``'s viewport (``wheel_target``): an inventory row
+    names a control, not the spot under a cursor, and a toolkit Button can
+    accept-and-ignore the wheel without scrolling.
+
+    A **point-addressed** element (``point:<x>,<y>``) follows the real pointer
+    path instead: the widget under the point gets the event first, and only an
+    *unaccepted* wheel falls through to the owning scroll area. That is what
+    lets a timeline's own ``Ctrl+wheel`` zoom run (it lives on the widget under
+    the cursor) while a plain background still scrolls its area.
+    ``raw=true`` keeps the event on the hit widget either way.
     """
     qt_phase = _WHEEL_PHASES.get(str(phase or "none").lower())
     if qt_phase is None:
@@ -166,27 +247,20 @@ def wheel_element(
             f"unknown wheel phase {phase!r}",
             "use one of: " + ", ".join(sorted(_WHEEL_PHASES)),
         )
-    widget = element.widget
-    # A wheel over an element means "scroll whatever owns it". The owning
-    # QAbstractScrollArea handles the wheel on its VIEWPORT, and an
-    # interactive child may accept-and-ignore it first (a toolkit Button with
-    # capabilities returns without scrolling), so route to the nearest
-    # ancestor scroll area's viewport. ``raw=True`` keeps the event on the
-    # element itself (widgets that consume the wheel on purpose).
-    widget = wheel_target(widget, raw=raw)
-    pos = widget.rect().center()
-    global_pos = widget.mapToGlobal(pos)
-    angle = QPoint(0, int(delta))
-    no_delta = QPoint(0, 0)
+    hit = element.widget
+    if getattr(element, "point", None) is not None and not raw:
+        owner = wheel_target(hit)
+        receivers = [hit] if owner is hit else [hit, owner]
+    else:
+        receivers = [wheel_target(hit, raw=raw)]
     for _ in range(max(1, int(count))):
-        event = QWheelEvent(
-            QPointF(pos),
-            QPointF(global_pos),
-            no_delta,
-            angle,
-            Qt.MouseButton.NoButton,
-            modifiers,
-            qt_phase,
-            False,
-        )
-        QApplication.sendEvent(widget, event)
+        for receiver in receivers:
+            if _send_wheel(
+                receiver,
+                element,
+                delta=delta,
+                phase=qt_phase,
+                modifiers=modifiers,
+            ):
+                break
+

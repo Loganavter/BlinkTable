@@ -63,6 +63,12 @@ class Element:
     #: properties (see :func:`query.scalar_properties`), e.g. ``gallery_path``
     #: for a gallery card. Empty when the widget carries none.
     properties: dict[str, Any] = field(default_factory=dict)
+    #: Global screen point this element was addressed at, when it came from a
+    #: ``point:<x>,<y>`` reference (``resolve.resolve_element``) rather than the
+    #: inventory. Pointer delivery uses it as the event position, so a wheel or
+    #: click lands where the caller aimed instead of at the widget's centre.
+    #: ``None`` for every inventory row — those keep the centre convention.
+    point: Any = None
 
     @property
     def screen_rect(self) -> QRect:
@@ -180,6 +186,7 @@ def _make_element(
     window: str,
     surface: str,
     action: Any | None,
+    point: Any = None,
 ) -> Element:
     action_id = getattr(action, "action_id", None) if action is not None else None
     owner_tab = getattr(action, "owner_tab", None) if action is not None else None
@@ -204,6 +211,7 @@ def _make_element(
         enabled=enabled,
         visible=visible,
         properties=scalar_properties(widget),
+        point=point,
     )
 
 
