@@ -2,8 +2,8 @@
 
 Found live 2026-11-06 (leased instance, magnifier enabled, image pair up): the
 spin could be driven to 7 and typed into, but pressing OK changed nothing —
-``magnifier_border_thickness`` never appeared in the profile and reopening the
-dialog showed 2 again.
+the magnifier_border_thickness key never appeared in the profile and reopening
+the dialog showed 2 again.
 
 The dialog carries tab values through ``SettingsDialogData.tab_extras``, which
 ``get_settings()`` fills with ``SettingsRegistry.read_payloads(dialog)``. That
