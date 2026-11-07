@@ -96,6 +96,12 @@ class SetExportFavoriteDirAction(Action):
     def get_payload(self): return {"path": self.path}
 
 @dataclass
+class SetExportCropToImageAction(Action):
+    enabled: bool
+    type: str = field(default=ActionType.SET_EXPORT_CROP_TO_IMAGE.value, kw_only=True)
+    def get_payload(self): return {"enabled": self.enabled}
+
+@dataclass
 class SetKeyboardOverridesAction(Action):
     overrides: dict[str, str]
     type: str = field(default=ActionType.SET_KEYBOARD_OVERRIDES.value, kw_only=True)

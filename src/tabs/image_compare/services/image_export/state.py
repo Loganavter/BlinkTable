@@ -123,9 +123,6 @@ class ExportStateCoordinator:
             settings.export_fill_background = bool(
                 export_opts.get("fill_background", False)
             )
-        settings.export_crop_to_image = bool(
-            export_opts.get("crop_to_image", False)
-        )
         bg_color = export_opts.get("background_color")
         settings.export_background_color = (
             self.color_from_tuple(bg_color) if bg_color else self.default_bg_color()
@@ -148,6 +145,17 @@ class ExportStateCoordinator:
                 settings.export_resolution_scale = max(0.05, float(scale))
             except (TypeError, ValueError):
                 pass
+
+        # "Crop to images" is a dispatched settings scalar (the no-direct-
+        # settings-mutation ratchet pins it). Dispatch last: one settings
+        # emit carries every field written above, and the reducer's replace
+        # copies those legacy direct writes into the state the save reads.
+        from core.state_management.actions import SetExportCropToImageAction
+
+        self.store.get_dispatcher().dispatch(
+            SetExportCropToImageAction(bool(export_opts.get("crop_to_image", False))),
+            scope="settings",
+        )
 
         if self.main_controller and hasattr(self.main_controller, "settings_manager"):
             self.main_controller.settings_manager.save_all_settings(self.store)

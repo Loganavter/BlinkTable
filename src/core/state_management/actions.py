@@ -58,6 +58,7 @@ from core.state_management.session_actions import (
 from core.state_management.settings_actions import (
     SetAutoCropBlackBordersAction,
     SetDebugModeEnabledAction,
+    SetExportCropToImageAction,
     SetExportFavoriteDirAction,
     SetLanguageAction,
     SetKeyboardOverridesAction,
