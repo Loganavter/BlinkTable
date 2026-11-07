@@ -13,6 +13,11 @@ other host-level export checks.
 What this suite cannot prove: the path Qt actually answers on a real Windows
 host (redirected or localised profile) — that needs a live host.
 
+The same coordinator owns the export settings write path, so the suite also
+pins that ``persist_export_settings`` dispatches the "crop to images" scalar
+(``SetExportCropToImageAction``) instead of mutating ``store.settings``
+directly.
+
 No ``QApplication`` is created here: ``QStandardPaths.writableLocation`` works
 without one on the offscreen platform. If a platform ever requires an app
 instance for it, this suite fails loudly instead of silently adding one.
@@ -35,6 +40,38 @@ from tabs.image_compare.services.image_export.state import (
     ExportStateCoordinator,
     default_downloads_dir,
 )
+
+
+def _live_store():
+    """Real Store + Dispatcher — the reducer path, not a mocked mutation."""
+    from core.state_management.dispatcher import Dispatcher
+    from core.store import Store
+
+    store = Store()
+    store.set_dispatcher(Dispatcher(store))
+    return store
+
+
+def test_persist_export_settings_dispatches_the_crop_scalar():
+    """The crop flag is a dispatched settings scalar, not a direct store write.
+
+    Red-before: with the ``SetExportCropToImageAction`` reducer branch removed
+    the action reduces to a no-op, so ``store.settings`` never changes (and no
+    action reaches the dispatcher). The identity check below can only pass if
+    the value arrived through dispatch → SettingsReducer → replace.
+    """
+    store = _live_store()
+    seen: list[str] = []
+    store.get_dispatcher().subscribe(lambda action: seen.append(action.type))
+    coordinator = ExportStateCoordinator(store, None, None)
+    options = {"output_dir": "/tmp/out", "file_name": "shot"}
+
+    coordinator.persist_export_settings({**options, "crop_to_image": True})
+    assert "SET_EXPORT_CROP_TO_IMAGE" in seen
+    assert store.settings.export_crop_to_image is True
+
+    coordinator.persist_export_settings({**options, "crop_to_image": False})
+    assert store.settings.export_crop_to_image is False
 
 
 def _fake_standard_paths(location: str):
