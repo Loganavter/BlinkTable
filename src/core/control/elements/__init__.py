@@ -69,6 +69,17 @@ dynamic properties (``gallery_path`` for gallery cards) — see
 ``property:<name>=<value>`` reference the live tools accept in their ``id``
 position: it is stable across tree reordering, unlike a positional id.
 
+**Point targeting.** The ``id`` slot also accepts ``point:<x>,<y>`` in
+**global screen coordinates** — the space ``screen_rect`` is in. It resolves
+the widget a real pointer at that point would reach (``QApplication.widgetAt``,
+which skips ``WA_TransparentForMouseEvents`` children), then the verb's normal
+delivery applies: that widget gets the event, and an unaccepted wheel falls
+through to the owning ``QAbstractScrollArea`` (``raw=true`` stops on the hit
+widget). A widget the inventory never lists — a paint-only timeline band, an
+overlay — is therefore addressable without the control layer naming a tab or a
+widget class. An outside point is a named error listing the live window
+bounds; it never falls back to the window.
+
 GUI thread only: every function here touches live widgets and must run where
 they live (the control server dispatches on the GUI thread). No threads.
 """
@@ -88,7 +99,7 @@ from .inventory import (
 )
 from .interaction import click_element, focus_element, hover_element, wheel_element
 from .query import MAX_ELEMENT_LIMIT, filter_elements
-from .resolve import PROPERTY_PREFIX, focus_target, key_target, resolve_element
+from .resolve import POINT_PREFIX, PROPERTY_PREFIX, focus_target, key_target, resolve_element
 
 #: Retry budget for an id that is not realized yet (FilmCraft's RETRY semantics:
 #: an agent need not sleep between "open" and "click"). Read at call time by
@@ -147,11 +158,15 @@ class ElementMethodsMixin:
     def ui_wheel(self, params: dict[str, Any]) -> dict[str, Any]:
         """Deliver wheel events to an element (scrolling, zoom, smooth streams).
 
-        ``phase`` reproduces high-resolution wheels; ``ctrl``/``shift``/``alt``
-        carry modifiers, which every zoom gesture needs (an Image Compare
-        canvas zooms on ``Ctrl+wheel`` only); ``raw`` keeps the event on the
-        element instead of routing it to the owning scroll area. A canvas is
-        never re-routed: it consumes the wheel itself.
+        ``id`` is an inventory id, a ``property:<name>=<value>`` reference, or
+        a ``point:<x>,<y>`` global screen point (the space ``screen_rect`` is
+        in) that resolves the widget a real pointer would reach — a canvas the
+        inventory skipped is still addressable. ``phase`` reproduces
+        high-resolution wheels; ``ctrl``/``shift``/``alt`` carry modifiers,
+        which every zoom gesture needs (an Image Compare canvas zooms on
+        ``Ctrl+wheel`` only); ``raw`` keeps the event on the element instead of
+        falling through to the owning scroll area. A canvas is never
+        re-routed: it consumes the wheel itself.
         """
         from PySide6.QtCore import Qt
 
@@ -238,6 +253,7 @@ __all__ = [
     "Element",
     "ElementMethodsMixin",
     "MAX_ELEMENT_LIMIT",
+    "POINT_PREFIX",
     "PROPERTY_PREFIX",
     "RETRY_STEP_MS",
     "RETRY_TIMEOUT_MS",

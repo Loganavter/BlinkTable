@@ -108,7 +108,7 @@ folder ever opened (2026-10-26).
 | `ui_hover` | write | hover an element by id, in-process (live-only) |
 | `ui_focus` | write | focus an element by id, in-process (live-only) |
 | `ui_press` | write | press an element's left button, optionally leaving it held (`release=false`, `hold_ms`) (live-only) |
-| `ui_wheel` | write | send `count` wheel events to an element with a chosen Qt scroll phase (`none`/`begin`/`update`/`end`) and modifiers (`ctrl`/`shift`/`alt`) — reproduces a discrete notch, a high-resolution stream, or a Ctrl+wheel canvas zoom; `raw=true` keeps the event on the element (a canvas always keeps it) (live-only) |
+| `ui_wheel` | write | send `count` wheel events to an element (by id, `property:<name>=<value>`, or a global `point:<x>,<y>`) with a chosen Qt scroll phase (`none`/`begin`/`update`/`end`) and modifiers (`ctrl`/`shift`/`alt`) — reproduces a discrete notch, a high-resolution stream, or a Ctrl+wheel canvas zoom; `raw=true` keeps the event on the element (a canvas always keeps it) (live-only) |
 | `jobs_cancel` | write | cancel a running job by id — real cancel, or a named refusal (live-only) |
 
 Resources: `app://actions`, `app://state`, `app://sessions`, `app://log`,
@@ -337,6 +337,24 @@ unknown property name, or zero matches is the existing named error: the hint
 lists close property names (or the values that do exist) and points at
 `ui_elements`. (`wait_for` matches rows by their inventory id, so it takes the
 literal id, not a property reference.)
+
+A second stable reference form aims at a **place** instead of a widget:
+`point:<x>,<y>`. The pair is **global screen coordinates** — the same space a
+row's `screen_rect` is in (add a widget-local offset from `rect` to it) — and
+it resolves the widget a real pointer at that point would reach
+(`QApplication.widgetAt`, which skips `WA_TransparentForMouseEvents` children,
+so an overlay does not eat the event). It is accepted in the same `id` position
+as an inventory id and a `property:` reference, which makes a widget the
+inventory never lists — a paint-only timeline band, a mouse-transparent
+overlay — addressable without the control layer naming a tab or a widget
+class. Delivery follows the real pointer path: with `raw=true` the event stays
+on the widget under the point; otherwise that widget gets it first and only an
+unaccepted wheel falls through to the owning `QAbstractScrollArea` (a canvas
+always keeps it). So a plain background still scrolls its area, while a widget
+that owns the wheel — the timeline's `Ctrl+wheel` zoom — receives it at the
+aimed point (a widget may zoom around the cursor, not its centre). A malformed
+reference, or a point no visible window covers, is a named error listing the
+live window bounds — never a silent delivery to the window.
 
 `list_surfaces` keeps the two flags the app computes: `live` (the row is a
 registered tab kind the live instance drives) and `capturable` (that kind's
@@ -753,8 +771,9 @@ inventing values. (Fallback `size` is parsed from the devtool's own
   arrive when the canvas id is named.
 - **Element targeting is live-only.** `ui_elements` reads the running window's
   widget inventory; `ui_click`/`ui_hover`/`ui_focus` act on an id (or a
-  `property:<name>=<value>` reference) from it. With no instance they answer an
-  honest error — no throwaway app is booted to fake a target.
+  `property:<name>=<value>` / global `point:<x>,<y>` reference) from it. With no
+  instance they answer an honest error — no throwaway app is booted to fake a
+  target.
 
 ### Refusals (no silent truncation)
 
