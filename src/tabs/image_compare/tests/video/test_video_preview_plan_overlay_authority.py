@@ -546,3 +546,124 @@ def test_live_recompute_never_nulls_a_plan_carried_overlay(monkeypatch):
     assert live_canvas._active_render_plan is not live_plan
     assert live_canvas._active_render_plan.overlay_layout is None
     assert _overlay_geometry_signature(live_canvas)["gpu_active"] is False
+
+
+def _spy_live_recompute(monkeypatch):
+    """Record live overlay recomputes and overlay resets, calling through.
+
+    ``apply_magnifier_overlay`` resets through its own module import and the
+    live rebuild resets through ``scene_update``; both are patched so "the
+    overlay was touched" is observable at either site.
+    """
+    from tabs.image_compare.canvas.features.magnifier.render import (
+        overlay as overlay_mod,
+    )
+    from tabs.image_compare.canvas.helpers import (
+        reset_canvas_overlays as real_reset,
+    )
+
+    live_calls: list = []
+    resets: list = []
+    real_rebuild = scene_update.rebuild_magnifier_overlay
+
+    def _rebuild_spy(presenter, *args, **kwargs):
+        live_calls.append(presenter)
+        return real_rebuild(presenter, *args, **kwargs)
+
+    def _reset_spy(canvas):
+        resets.append(canvas)
+        return real_reset(canvas)
+
+    monkeypatch.setattr(scene_update, "rebuild_magnifier_overlay", _rebuild_spy)
+    monkeypatch.setattr(scene_update, "reset_canvas_overlays", _reset_spy)
+    monkeypatch.setattr(overlay_mod, "reset_canvas_overlays", _reset_spy)
+    return live_calls, resets
+
+
+def test_set_store_scene_flush_keeps_a_plan_carried_overlay(monkeypatch):
+    """A store-bound ``set_store`` flush must not re-derive a plan-owned overlay.
+
+    ``_flush_render_scene`` is the third live-recompute call site (it is only
+    reached after ``set_store`` wires ``store.on_change``). It used to run
+    ``apply_feature_live_runtime_overlays`` unconditionally, which replaced the
+    plan with a live-recomputed one — or, when no layout could be built, nulled
+    the recorded overlay and reset the canvas. The rule from the other two
+    sites applies here too: the plan owns the overlay, so the flush rebuilds
+    the scene and repaints without touching it.
+    """
+    store = _recording_store()
+    plan = _snapshot_plan(store)
+
+    canvas = _canvas()
+    apply_canvas_render_plan(
+        canvas, plan, store=None, clip_overlays_to_image_bounds=False
+    )
+    assert canvas._active_render_plan is plan
+    before = _overlay_signature(canvas)
+    assert before["gpu_active"] is True and before["slots"]
+    assert int(before["guides"][2]) == PLAN_GUIDES_THICKNESS
+
+    live_calls, resets = _spy_live_recompute(monkeypatch)
+    repaints: list = []
+    monkeypatch.setattr(
+        canvas, "update", lambda *args, **kwargs: repaints.append(1)
+    )
+
+    canvas.set_store(store)
+    scene_before_flush = canvas.runtime_state._render_scene
+    canvas._refresh_render_scene()
+    QTest.qWait(50)
+
+    assert live_calls == [], (
+        "the scene flush ran the live overlay recompute over a plan that owns"
+        " its overlay"
+    )
+    assert resets == [], "the scene flush reset the plan-carried overlay"
+    assert canvas._active_render_plan is plan, (
+        "the live recompute replaced the recorded plan"
+    )
+    assert _overlay_signature(canvas) == before, (
+        "the scene flush changed the plan-carried overlay state"
+    )
+
+    # It still rebuilt the render scene and still repainted.
+    scene_after_flush = canvas.runtime_state._render_scene
+    assert scene_after_flush is not None
+    assert scene_after_flush is not scene_before_flush
+    assert int(scene_after_flush.diff_mode_int) == 1
+    assert repaints, "the flush stopped repainting the canvas"
+
+
+def test_set_store_scene_flush_still_runs_live_recompute_without_a_plan_overlay(
+    monkeypatch,
+):
+    """Anti-freeze: an overlay-less plan keeps today's live recompute.
+
+    A plan without an ``overlay_layout`` is not the overlay's owner, so the
+    store-bound flush must still run the live recompute and let it take over.
+    """
+    store = _recording_store()
+    baked1, baked2 = _baked_pair()
+    live_plan = replace(
+        build_canvas_plan(store, baked1, baked2), overlay_layout=None
+    )
+    assert live_plan.overlay_layout is None
+
+    canvas = _canvas()
+    apply_canvas_render_plan(
+        canvas, live_plan, store=None, clip_overlays_to_image_bounds=False
+    )
+    assert canvas._active_render_plan is live_plan
+    live_calls, _resets = _spy_live_recompute(monkeypatch)
+
+    canvas.set_store(store)
+    canvas._refresh_render_scene()
+    QTest.qWait(50)
+
+    assert live_calls, (
+        "an overlay-less plan must keep the live overlay recompute"
+    )
+    assert canvas._active_render_plan is not live_plan, (
+        "the live recompute must own an overlay-less plan's overlay state"
+    )
+    assert canvas._active_render_plan.overlay_layout is not None
