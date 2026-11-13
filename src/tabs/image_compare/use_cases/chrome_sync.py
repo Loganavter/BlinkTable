@@ -735,11 +735,15 @@ class ImageCompareChromeSync(QObject):
             pass
 
     def on_language_changed(self, window_presenter):
-        lang_code = self.store.settings.current_language
-        page_visible = self.widget is not None and self.widget.isVisible()
-        if page_visible:
-            self._workspace_language_stale = False
-            self._refresh_visible_workspace_language(window_presenter, lang_code)
+        # Mark stale unconditionally, then flush when the page is current.
+        # Marking is what makes ``flush_stale_workspace_language`` cover BOTH
+        # cases: a page stacked away at switch time (flushed on activation) and
+        # a page that is already current (flushed right here). The old code
+        # only refreshed the visible page and never marked the hidden one, so
+        # the settings presenter chrome and the PSNR/SSIM prefixes stayed in the
+        # previous language on either path.
+        self._workspace_language_stale = True
+        self.flush_stale_workspace_language(window_presenter)
 
     def flush_stale_render(self, window_presenter) -> None:
         # Dedup: single StaleGate — delegate to widget's flush if shared gate, else consume gate.
@@ -787,6 +791,9 @@ class ImageCompareChromeSync(QObject):
         self.do_update_combobox_displays(window_presenter)
         self.do_update_rating_displays(window_presenter)
         self.do_update_file_names_display(window_presenter)
+        # PSNR/SSIM prefixes ("PSNR:" / "ССИМ:") are built with tr(key, lang)
+        # inside this call — without it a live switch leaves the old prefix.
+        self.do_update_resolution_labels(window_presenter)
         flyout = self._font_settings_flyout(window_presenter)
         if flyout is not None:
             flyout.set_values(

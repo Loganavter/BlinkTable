@@ -1,0 +1,58 @@
+# Allowlist for src/devtools/check_language_bindings.py — one entry per file.
+#
+# Format: <path relative to repo root><TAB><measured reason>
+# The list is a ratchet: an entry whose file is no longer a violation IS a
+# violation (stale entry), so it can only shrink. Add a line only after
+# reading the call site; never to silence a violation you did not look at.
+#
+# Scope of the gate: src/ui/**, src/plugins/**, src/tabs/*/ui/**,
+# src/tabs/*/widget.py, src/tabs/*/plugins/**. Engine/shared code holds no
+# persistent widget text and is out of scope.
+
+# --- translator helpers: tr(key, <caller-supplied lang>) re-runs per call ---
+src/plugins/export/controller.py	exports a translator helper (`_tr(key)`) that resolves against the live store language on every export string, not once at construction.
+src/plugins/help/labels.py	resolves a node's title/description key at render time via `tr(node.key, language=language)`; the topic tree is re-rendered on navigation.
+src/plugins/help/text_context_menu.py	helper renders one context-menu entry per call with the caller's language (`tr(key, language=language)`); no widget text is stored.
+src/ui/actions/palette/common.py	`tr_action()` is a lookup helper resolved per action build, used by the palette/menu rebuild paths.
+src/ui/actions/registry.py	action label/description lookups resolve per call from the live language (`tr(key, lang)`), not stored on a widget.
+src/ui/main_window/ui.py	`_localized_session_type_label(..., language)` is a pure lookup that takes the language per call.
+src/ui/presenters/main_window/workspace_tab_menu.py	`_tr(key, fallback, language)` helper; the tab menu is rebuilt on every open/language change.
+src/tabs/image_compare/plugins/video_editor/widgets/timeline/app_callbacks.py	`app_localize_token()` localizes a timeline token per invocation (playhead/track kind), never a stored label.
+src/tabs/image_gallery/ui/grid_view/pool.py	`_tr(key, default)` delegates to the gallery context translator at card build time; cards are rebuilt/re-rendered on the gallery retranslate path.
+src/tabs/image_gallery/ui/quick_look/headers.py	local `tr = owner._tr` alias resolved per header render; the Quick Look overlay is rebuilt and retranslated by the gallery chrome pass.
+src/tabs/image_gallery/ui/quick_look/meta.py	local `tr = owner._tr` alias resolved per metadata row render (exif/size notes), never stored on a persistent widget.
+src/tabs/image_gallery/ui/quick_look/metrics/theme.py	local `tr = owner._tr` alias for the metrics panel label lookup, resolved per render.
+src/tabs/image_gallery/ui/quick_look/overlay_parts/theming.py	local `tr` alias to the quick-look translator, resolved per theme/label lookup.
+src/tabs/image_gallery/ui/stats_strip/__init__.py	local `tr = owner._tr` alias; `retranslate()` re-renders every strip label on a live switch.
+src/tabs/image_gallery/ui/toolbar/__init__.py	local `tr = owner._tr` alias; `retranslate()` re-renders every toolbar label on a live switch.
+src/tabs/image_gallery/ui/clean_review/__init__.py	local `tr(key, default)` alias to the clean-review translator, resolved per card/summary render.
+src/tabs/image_gallery/ui/widget_parts/ask_ai_sidebar.py	local `tr = owner._tr_ui` alias for the sidebar toggle texts; `retranslate(owner)` re-applies them on a live switch.
+
+# --- one-shot / per-open surfaces: nothing persistent to bind ---
+src/plugins/help/dialog.py	host shell re-runs its own `update_language()` and re-renders the topic page; per-open strings (window title, search placeholder, open-topic label) are resolved when the dialog is built or re-shown.
+src/plugins/help/topic_search.py	search result/empty-state text is computed per query inside `_apply_topic_search`, immediately before being shown.
+src/tabs/image_compare/plugins/video_editor/services/export_flow.py	one-shot success notification text built at export completion with the live language.
+src/tabs/image_compare/ui/context_menu.py	menu entries and `_tr` lookups resolve when the context menu is built (per right-click); no long-lived widget keeps them.
+src/tabs/image_compare/ui/transient_interpolation.py	popup labels are built when the interpolation chooser opens and discarded on close.
+src/tabs/image_compare/ui/magnifier_color_controls.py	`_build_actions` builds the color menu per open of the flyout.
+src/ui/context_menu/line_edit_menu.py	line-edit context menu is constructed per right-click with `default=` fallbacks.
+src/ui/widgets/color/picker_dialog.py	dialog is constructed per open; button texts/tooltips are passed in or resolved at construction.
+src/ui/presenters/main_window/actions.py	error dialog strings are built when the warning is raised.
+
+# --- first-paint text for widgets bound elsewhere in the same build ---
+src/tabs/image_compare/ui/layout.py	toolbar group titles are set here for first paint; `ui/translations.py::_bind_group_titles` re-applies them on a live switch.
+src/tabs/image_compare/ui/primitives.py	assembly-time text for btn_image1/btn_image2/btn_save, which `ui/translations.py` binds (`translatable_text`) right after assembly.
+src/ui/widgets/font_settings_flyout.py	`_tr(key)` helper resolves against the flyout's own `current_language` per call; the flyout's values (including that language) are re-applied via `set_values` on open and by `presenter.repopulate_flyouts()`.
+
+# --- dynamic labels recomputed from the live language ---
+src/tabs/image_compare/widget.py	drag-overlay text is rebuilt on every `update_drag_overlays` call and file-name prefixes on every paint, both from the live language — nothing is cached on a widget.
+src/tabs/image_gallery/ui/widget_parts/ask_ai_surface.py	`default_texts()` never imports the global `tr`: it calls the host translator (`owner._tr_ui`) and is re-invoked by `ask_ai_sidebar.retranslate()` on every live switch.
+
+# --- explicit manual re-apply paths (do not duplicate the signal) ---
+src/ui/managers/tray_manager.py	`update_language(lang)` is called from `presenters/main_window/state.py::on_language_changed` and rewrites every QAction text; subscribing here would duplicate that hook.
+src/tabs/image_compare/plugins/video_editor/translations.py	the module IS the retranslate entry: `apply_translations(dialog, lang)` rewrites every label/tooltip/combo from an explicit language argument, driven by `VideoEditorPlugin._on_language_changed` (SettingsChangeLanguageEvent) -> `dialog.update_language`.
+src/tabs/image_compare/plugins/video_editor/dialog/shell.py	dialog chrome is re-applied by `update_language()` -> `apply_translations`; the module-level `tr` is only the `_tr(text)` helper used at render time.
+src/tabs/image_compare/tab.py	localized_display_name(language) resolves the session-type title per call; the host re-renders tab titles on language change
+src/tabs/image_gallery/tab.py	localized_display_name(language) resolves the tab title per call; the host re-renders tab titles on language change
+src/tabs/multi_compare/tab.py	localized_display_name(language) resolves the tab title per call; the host re-renders tab titles on language change
+src/tabs/session_picker/tab.py	localized_display_name(language) resolves the tab title per call; the host re-renders tab titles on language change

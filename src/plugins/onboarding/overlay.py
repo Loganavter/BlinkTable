@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from resources.translations import tr
+from sli_ui_toolkit.i18n import translatable_callback, translatable_text
 from sli_ui_toolkit.theme import ThemeManager
 from sli_ui_toolkit.managers import scaled_px
 from sli_ui_toolkit.widgets import Button
@@ -213,14 +214,17 @@ class OnboardingOverlay(QWidget):
 
         self.top_layout.addWidget(slide_wrapper, 1)
 
-        current_lang = getattr(self.store.settings, "current_language", "en")
-
-        hint_text_main = tr("onboarding.mode_hint", current_lang)
-        hint_text_controls = tr("onboarding.magnifier_controls_hint", current_lang)
-        full_hint_text = f"{hint_text_main}\n{hint_text_controls}"
-
-        self.hint_label = QLabel(full_hint_text)
+        self.hint_label = QLabel()
         self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Two keys on one label: a composite callback, bound (not resolved
+        # once) so a live language switch reaches the hint.
+        translatable_callback(
+            self.hint_label,
+            lambda lang: self.hint_label.setText(
+                f"{tr('onboarding.mode_hint', lang)}\n"
+                f"{tr('onboarding.magnifier_controls_hint', lang)}"
+            ),
+        )
         self.top_layout.addWidget(self.hint_label)
 
         self.mode_buttons_layout = QHBoxLayout()
@@ -228,7 +232,10 @@ class OnboardingOverlay(QWidget):
 
         self.mode_buttons = []
         for i, mode in enumerate(self.modes):
-            btn = Button(text=mode["name"], variant="surface", corner_radius=8)
+            btn = Button(text="", variant="surface", corner_radius=8)
+            # Chip label is a bound key (mode["name"] stays the first-paint
+            # string for host code that reads it).
+            translatable_text(btn, mode["name_key"])
             btn.setObjectName(f"onboarding-mode-{mode.get('key', i)}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             # Avoid QWidget's default 640x480 sizeHint before the first _scale_all.
@@ -257,13 +264,13 @@ class OnboardingOverlay(QWidget):
         self.bottom_layout.setSpacing(scaled_px(8))
         self.bottom_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        welcome_text = tr("onboarding.welcome", current_lang)
-        self.welcome_lbl = QLabel(welcome_text)
+        self.welcome_lbl = QLabel()
         self.welcome_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        translatable_text(self.welcome_lbl, "onboarding.welcome")
         self.bottom_layout.addWidget(self.welcome_lbl)
 
-        start_text = tr("onboarding.start_button", current_lang)
-        self.btn_start = Button(text=start_text, variant="surface")
+        self.btn_start = Button(text="", variant="surface")
+        translatable_text(self.btn_start, "onboarding.start_button")
         self.btn_start.setObjectName("onboarding-start")
         self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_start.setFixedSize(scaled_px(200), scaled_px(48))
