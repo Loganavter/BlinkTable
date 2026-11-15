@@ -29,6 +29,12 @@ TextureArraySizeMax
 UBuf
 Xvfb
 _apply_preview_scene
+# imagecodecs API names cited by the JXL encoder/capability probe
+# (src/shared/image_processing/format_capability.py). External library
+# symbols, not repo names; the 2026.x wheels only expose the dedicated
+# encoder, so the comment has to name it.
+jpegxl_encode
+jpegxl_decode
 # GLSL identifiers cited from the CPU thumbnail composer
 # (src/tabs/image_compare/services/video_snapshot_rendering/cpu_thumbnail.py
 # mirrors canvas/shaders/base_array.frag). Runtime names, not repo symbols.
