@@ -50,5 +50,6 @@ SETTINGS_SCALARS: tuple[ScalarSpec, ...] = (
     ScalarSpec("window_was_maximized", "window_was_maximized", "SET_WINDOW_WAS_MAXIMIZED", "SetWindowWasMaximizedAction", "was_maximized"),
     ScalarSpec("export_favorite_dir", "export_favorite_dir", "SET_EXPORT_FAVORITE_DIR", "SetExportFavoriteDirAction", "path"),
     ScalarSpec("export_crop_to_image", "export_crop_to_image", "SET_EXPORT_CROP_TO_IMAGE", "SetExportCropToImageAction", "enabled"),
+    ScalarSpec("export_save_view", "export_save_view", "SET_EXPORT_SAVE_VIEW", "SetExportSaveViewAction", "enabled"),
     ScalarSpec("keyboard_overrides", "keyboard_overrides", "SET_KEYBOARD_OVERRIDES", "SetKeyboardOverridesAction", "overrides"),
 )

@@ -60,6 +60,7 @@ from core.state_management.settings_actions import (
     SetDebugModeEnabledAction,
     SetExportCropToImageAction,
     SetExportFavoriteDirAction,
+    SetExportSaveViewAction,
     SetLanguageAction,
     SetKeyboardOverridesAction,
     SetRhiBackendAction,

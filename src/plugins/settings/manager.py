@@ -511,6 +511,7 @@ class SettingsManager:
         s.export_crop_to_image = self._get_setting(
             "export_crop_to_image", False, bool
         )
+        s.export_save_view = self._get_setting("export_save_view", False, bool)
         s.export_background_color = hex_to_color(
             self._get_setting("export_background_color", "#FFFFFFFF", str)
         )
@@ -655,6 +656,7 @@ class SettingsManager:
         self._save_setting("export_quality", s.export_quality)
         self._save_setting("export_fill_background", s.export_fill_background)
         self._save_setting("export_crop_to_image", s.export_crop_to_image)
+        self._save_setting("export_save_view", s.export_save_view)
         self._save_setting(
             "export_background_color", color_to_hex(s.export_background_color)
         )

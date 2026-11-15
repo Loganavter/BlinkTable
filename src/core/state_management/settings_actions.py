@@ -102,6 +102,12 @@ class SetExportCropToImageAction(Action):
     def get_payload(self): return {"enabled": self.enabled}
 
 @dataclass
+class SetExportSaveViewAction(Action):
+    enabled: bool
+    type: str = field(default=ActionType.SET_EXPORT_SAVE_VIEW.value, kw_only=True)
+    def get_payload(self): return {"enabled": self.enabled}
+
+@dataclass
 class SetKeyboardOverridesAction(Action):
     overrides: dict[str, str]
     type: str = field(default=ActionType.SET_KEYBOARD_OVERRIDES.value, kw_only=True)

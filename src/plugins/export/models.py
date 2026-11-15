@@ -32,3 +32,15 @@ class ExportDialogState:
     # Preview raster of the cropped variant — the pane switches to it with the
     # option, so it shows exactly the file that will be written.
     crop_preview_image: object | None = None
+    # "Save view": export the region the viewport shows (zoom + pan) at native
+    # density — one canvas pixel per output pixel. ``available`` is the tab's
+    # capability flag; a tab whose view is not zoomable right now leaves it
+    # False and the shared dialog hides the option instead of offering a crop
+    # of the whole canvas. ``view_rect`` is the tab-owned snapshot in canvas px
+    # (``shared.image_processing.view_geometry.visible_view_rect``) and
+    # ``view_native_size`` its ``(width, height)`` pair. Read defensively: the
+    # tabs land these on their own schedule.
+    save_view: bool = False
+    save_view_available: bool = False
+    view_rect: tuple[int, int, int, int] | None = None
+    view_native_size: tuple[int, int] | None = None

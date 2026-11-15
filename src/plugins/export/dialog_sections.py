@@ -276,6 +276,31 @@ def build_action_bar(dialog) -> None:
     ACTIONS.tag_member(dialog.btn_cancel, "common.cancel")
 
 
+def build_save_view_row(dialog) -> None:
+    """Save the region the viewport shows (zoom + pan), at native density.
+
+    Same shape as "crop to images": toolkit ``CheckBox``, tagged for Find
+    Action, tooltip spelling out what the option changes. Hidden unless the tab
+    reports a visible-view rect — the rect is tab-owned, so a tab that cannot
+    report one must not offer the option.
+
+    The tag mirrors the sibling option's (also a member of no search group):
+    the palette lists dialog chrome per group, and these two frame options
+    belong to the group their reveal target already lives in.
+    """
+    dialog.checkbox_save_view = CheckBox(
+        dialog._tr("export.save_view", "Save view")
+    )
+    dialog.checkbox_save_view.setToolTip(
+        dialog._tr(
+            "export.save_view_tooltip",
+            "Export what the viewport shows — zoom and pan included — at native resolution.",
+        )
+    )
+    dialog.checkbox_save_view.toggled.connect(dialog._on_save_view_toggled)
+    BACKGROUND.tag_member(dialog.checkbox_save_view, "export.save_view")
+
+
 def assemble_export_form(dialog) -> tuple[QFrame, QFrame]:
     """Build preview + form panes and return ``(left_frame, right_frame)``."""
     left_frame = build_preview_pane(dialog)
@@ -294,6 +319,7 @@ def assemble_export_form(dialog) -> tuple[QFrame, QFrame]:
     build_quality_controls(dialog)
     build_png_options(dialog)
     build_background_row(dialog)
+    build_save_view_row(dialog)
     build_crop_row(dialog)
     build_metadata_block(dialog)
     build_action_bar(dialog)
@@ -315,6 +341,7 @@ def assemble_export_form(dialog) -> tuple[QFrame, QFrame]:
     right_layout.addWidget(dialog.png_row)
     right_layout.addStretch(1)
     right_layout.addWidget(dialog.bg_color_row)
+    right_layout.addWidget(dialog.checkbox_save_view)
     right_layout.addWidget(dialog.checkbox_crop_to_image)
     right_layout.addStretch(1)
     right_layout.addWidget(dialog.checkbox_include_metadata)
