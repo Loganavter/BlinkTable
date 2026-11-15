@@ -816,9 +816,27 @@ def refresh_live_content_rect(canvas, state, plan) -> None:
     if widget_width <= 0 or widget_height <= 0:
         return
     if not owns_padded:
-        store = getattr(state, "_store", None) or getattr(canvas, "_store", None)
-        if store is None:
-            return
+        # ``plan.envelope_dims`` is the pair envelope in SOURCE space, carried
+        # by the plan builder. Preferring it over the installed display tier is
+        # what keeps the drawn rect (and therefore the loupe glass) identical
+        # on a preview frame and on the unified frame; ``None`` keeps today's
+        # display-dim fit bit-identically.
+        #
+        # It also makes the store gate below conditional: a preview-tier frame
+        # of a NEW pair has no store attached yet (the pyramid is still
+        # building), and returning early there left ``_content_rect_px`` at the
+        # OUTGOING pair's rect. Every canvas-px consumer (divider bar position
+        # and clip, magnifier geometry, letterbox fill) then drew against the
+        # old aspect — the owner-visible "vertical seam at the previous pair's
+        # content edge that stays until something re-uploads" plus the loupe
+        # overlap outline flapping in that zone (owner report 2026-11-15).
+        # The source envelope is tier-independent truth, so it can be fitted
+        # without a store.
+        _plan_envelope = normalize_envelope_dims(getattr(plan, "envelope_dims", None))
+        if _plan_envelope is None:
+            store = getattr(state, "_store", None) or getattr(canvas, "_store", None)
+            if store is None:
+                return
         # Pair envelope, not slot 1 alone: the same rule
         # ``update_common_letterbox_geometry`` fits both letterbox slots with,
         # through the same helper. A slot-1-only fit is not pair-invariant —
@@ -828,13 +846,6 @@ def refresh_live_content_rect(canvas, state, plan) -> None:
         # every canvas-px → widget-px conversion (loupe radius/spacing/border,
         # divider/guide thickness) jumped with the swap and again when unify
         # landed (owner report 2026-10-27).
-        #
-        # ``plan.envelope_dims`` is that envelope in SOURCE space, carried by
-        # the plan builder. Preferring it over the installed display tier is
-        # what keeps the drawn rect (and therefore the loupe glass) identical
-        # on a preview frame and on the unified frame; ``None`` keeps today's
-        # display-dim fit bit-identically.
-        _plan_envelope = normalize_envelope_dims(getattr(plan, "envelope_dims", None))
         if _plan_envelope is not None:
             sizes = [
                 (_plan_envelope[0], _plan_envelope[1]),

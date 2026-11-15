@@ -303,7 +303,18 @@ def _mc_transform(
         "source": sources["transform"],
         "input_space": SPACE_COMPOSITION_PX,
         "output_space": SPACE_FRAMEBUFFER_PX,
+        # The transform-level camera is the SCENE camera (whole composition):
+        # it is what scales the projection below, so reporting the content
+        # camera here made the read claim "identity" while the projection was
+        # visibly zoomed (measured live 2026-11-15). The per-slot content
+        # camera stays visible on each pane as ``layer_zoom``/``layer_pan``.
         "camera": {
+            "zoom": _num(_scene_camera(state)[0], 1.0),
+            "pan": [_num(_scene_camera(state)[1]), _num(_scene_camera(state)[2])],
+            "space": SPACE_RELATIVE,
+            "state_materialized": True,
+        },
+        "content_camera": {
             "zoom": _num(getattr(state, "zoom", 1.0), 1.0),
             "pan": [
                 _num(getattr(state, "pan_x", 0.0)),
@@ -316,6 +327,21 @@ def _mc_transform(
         "framebuffer": [_num(framebuffer[0]), _num(framebuffer[1])],
         "framebuffer_source": framebuffer_source,
     }
+
+
+def _scene_camera(state: Any) -> tuple[float, float, float]:
+    """``(zoom, pan_x, pan_y)`` of the whole-composition camera.
+
+    Delegates to the tab's single reader (``scene/projection.py``) so the
+    scene dump cannot drift from the renderer; a state without the fields
+    reads as identity.
+    """
+    try:
+        from tabs.multi_compare.scene.projection import scene_camera
+
+        return scene_camera(state)
+    except Exception:
+        return (1.0, 0.0, 0.0)
 
 
 def _framebuffer_size(canvas: Any) -> tuple[tuple[float, float], str]:

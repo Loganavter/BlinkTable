@@ -35,7 +35,16 @@ class ExportSaveContext:
         return self.crop_plan is not None
 
     def select(self, export_options: dict) -> ExportSaveContext:
-        """Pick the variant the accepted options ask for (same object otherwise)."""
+        """Pick the variant the accepted options ask for (same object otherwise).
+
+        "Save view" always writes the full composition cropped to the view
+        rect: its rect is expressed in that canvas, so the cropped pair would
+        be a different composition under a rect nobody saw. The two options
+        are mutually exclusive in the dialog; if both arrive, save view wins
+        (same rule as ``ExportService.export_image``).
+        """
+        if bool(export_options.get("save_view", False)):
+            return self
         if not bool(export_options.get("crop_to_image", False)) or not self.has_crop_variant():
             return self
         return ExportSaveContext(

@@ -64,6 +64,54 @@ def scale_rect_to_raster(
     return (left, top, right, bottom)
 
 
+def view_rect_in_raster(
+    rect: tuple[int, int, int, int] | None,
+    plan: Any,
+    raster_size: tuple[int, int] | None,
+) -> tuple[int, int, int, int] | None:
+    """Save-view rect (canvas px) -> crop box in the rendered raster.
+
+    The save-view frame is rendered at the plan's native canvas size, so this
+    is usually 1:1. The scale is kept anyway: a caller that renders some other
+    raster must still crop the region the user saw, not the top-left corner of
+    a resampled frame. The rect is clamped to the plan canvas, so a rect from
+    an older snapshot can never run off the frame.
+    """
+    if rect is None or plan is None or raster_size is None:
+        return None
+    try:
+        left, top, width, height = (int(v) for v in tuple(rect)[:4])
+    except (TypeError, ValueError):
+        return None
+    canvas_w = int(getattr(plan, "canvas_w", 0) or 0)
+    canvas_h = int(getattr(plan, "canvas_h", 0) or 0)
+    if width <= 0 or height <= 0 or canvas_w <= 0 or canvas_h <= 0:
+        return None
+    left = min(max(0, left), canvas_w - 1)
+    top = min(max(0, top), canvas_h - 1)
+    width = min(width, canvas_w - left)
+    height = min(height, canvas_h - top)
+    return scale_rect_to_raster(
+        (left, top, width, height, canvas_w, canvas_h), raster_size
+    )
+
+
+def crop_to_view_rect(image, rect: tuple[int, int, int, int] | None, plan: Any):
+    """Trim *image* to the recorded visible-view rect; no-op when unusable."""
+    if image is None or rect is None or plan is None:
+        return image
+    size = getattr(image, "size", None)
+    if not size:
+        return image
+    box = view_rect_in_raster(rect, plan, size)
+    if box is None:
+        return image
+    try:
+        return image.crop(box)
+    except Exception:
+        return image
+
+
 def crop_to_plan_content(image, plan: Any):
     """Trim *image* to the plan's image area; unchanged when there is none."""
     if image is None:

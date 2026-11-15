@@ -81,6 +81,11 @@ _MOCK_ROOTS = frozenset({"monkeypatch", "mock", "mocker", "patch"})
 #: Migrate a site to ``dispatch(Set*Action)`` and drop its entry (a stale
 #: entry fails the test).
 #:
+#: Pin refreshed again when the save-view options (``save_view``/``view_rect``
+#: in ``build_quick_export_options``) added lines above this block — the same
+#: kind of move-only refresh, no new direct write (the new option is read
+#: through ``getattr``, never written here).
+#:
 #: Pin refreshed 2026-11-06 after #79 (export crop-to-images) inserted a write
 #: in ``image_export/state.py`` and shifted both that block and the
 #: ``SettingsManager`` load block. The refresh is deliberate: only line
@@ -88,6 +93,13 @@ _MOCK_ROOTS = frozenset({"monkeypatch", "mock", "mocker", "patch"})
 #: (``export_crop_to_image``) was migrated to ``SetExportCropToImageAction``
 #: instead of being pinned, so the ratchet caught it rather than the re-pin
 #: laundering it.
+#:
+#: Pin refreshed 2026-11-15 (scene-zoom save-view): ``export_save_view`` added
+#: one load line to the same un-migrated ``load_all_settings`` block, so that
+#: one site is pinned like its 39 siblings (the whole function is a bootstrap
+#: writer by design — see the module docstring) and the lines below it moved by
+#: one. The store-side write path for the same setting is NOT pinned: it goes
+#: through ``SetExportSaveViewAction``.
 ALLOWLIST: frozenset[str] = frozenset({
     "src/plugins/settings/manager.py:448",
     "src/plugins/settings/manager.py:449",
@@ -115,32 +127,33 @@ ALLOWLIST: frozenset[str] = frozenset({
     "src/plugins/settings/manager.py:508",
     "src/plugins/settings/manager.py:511",
     "src/plugins/settings/manager.py:514",
-    "src/plugins/settings/manager.py:517",
+    "src/plugins/settings/manager.py:515",
     "src/plugins/settings/manager.py:518",
-    "src/plugins/settings/manager.py:521",
+    "src/plugins/settings/manager.py:519",
     "src/plugins/settings/manager.py:522",
-    "src/plugins/settings/manager.py:525",
-    "src/plugins/settings/manager.py:528",
+    "src/plugins/settings/manager.py:523",
+    "src/plugins/settings/manager.py:526",
     "src/plugins/settings/manager.py:529",
-    "src/plugins/settings/manager.py:532",
-    "src/plugins/settings/manager.py:535",
-    "src/plugins/settings/manager.py:538",
-    "src/plugins/settings/manager.py:541",
-    "src/plugins/settings/manager.py:544",
-    "src/plugins/settings/manager.py:547",
+    "src/plugins/settings/manager.py:530",
+    "src/plugins/settings/manager.py:533",
+    "src/plugins/settings/manager.py:536",
+    "src/plugins/settings/manager.py:539",
+    "src/plugins/settings/manager.py:542",
+    "src/plugins/settings/manager.py:545",
+    "src/plugins/settings/manager.py:548",
     "src/tabs/image_compare/plugins/video_editor/presenter_parts/output_paths.py:108",
-    "src/tabs/image_compare/services/image_export/state.py:118",
-    "src/tabs/image_compare/services/image_export/state.py:119",
-    "src/tabs/image_compare/services/image_export/state.py:123",
+    "src/tabs/image_compare/services/image_export/state.py:126",
     "src/tabs/image_compare/services/image_export/state.py:127",
-    "src/tabs/image_compare/services/image_export/state.py:130",
     "src/tabs/image_compare/services/image_export/state.py:131",
-    "src/tabs/image_compare/services/image_export/state.py:132",
-    "src/tabs/image_compare/services/image_export/state.py:136",
-    "src/tabs/image_compare/services/image_export/state.py:137",
+    "src/tabs/image_compare/services/image_export/state.py:135",
+    "src/tabs/image_compare/services/image_export/state.py:138",
     "src/tabs/image_compare/services/image_export/state.py:139",
     "src/tabs/image_compare/services/image_export/state.py:140",
+    "src/tabs/image_compare/services/image_export/state.py:144",
     "src/tabs/image_compare/services/image_export/state.py:145",
+    "src/tabs/image_compare/services/image_export/state.py:147",
+    "src/tabs/image_compare/services/image_export/state.py:148",
+    "src/tabs/image_compare/services/image_export/state.py:153",
     "src/tabs/multi_compare/use_cases/export.py:65",
     "src/tabs/multi_compare/use_cases/export.py:67",
     "src/tabs/multi_compare/use_cases/export.py:68",
@@ -149,12 +162,11 @@ ALLOWLIST: frozenset[str] = frozenset({
     "src/tabs/multi_compare/use_cases/export.py:73",
     "src/tabs/multi_compare/use_cases/export.py:75",
     "src/tabs/multi_compare/use_cases/export.py:77",
-    "src/tabs/multi_compare/use_cases/export.py:79",
-    "src/tabs/multi_compare/use_cases/export.py:81",
-    "src/tabs/multi_compare/use_cases/export.py:85",
+    "src/tabs/multi_compare/use_cases/export.py:91",
     "src/tabs/multi_compare/use_cases/export.py:93",
-    "src/ui/canvas_infra/rhi/rhi_fallback_notice.py:72",
-})
+    "src/tabs/multi_compare/use_cases/export.py:97",
+    "src/tabs/multi_compare/use_cases/export.py:105",
+    "src/ui/canvas_infra/rhi/rhi_fallback_notice.py:72",})
 _MIGRATION_HINT = (
     "Direct Store.settings mutation outside Dispatcher/Reducer — "
     "use store.get_dispatcher().dispatch(Set*Action, scope=\"settings\") "

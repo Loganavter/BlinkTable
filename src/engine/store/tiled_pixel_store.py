@@ -368,7 +368,15 @@ def release_spill_mapping(owner) -> bool:
     of a reference count, so the decision does not depend on how many
     temporaries a caller happens to hold.
     """
+    had_mapping = "_memmap" in owner.__dict__
     model = owner.__dict__.pop("_memmap", None)
+    if had_mapping:
+        # Re-publish the closed state IMMEDIATELY: the pop above is the only
+        # instant in which ``_memmap`` is absent, and a reader on another
+        # thread (``is_open`` from the pyramid registry sweep) must never see
+        # that shape. ``finally`` below re-sets it for the normal path; this
+        # line closes the window the flush/close work would otherwise widen.
+        owner.__dict__["_memmap"] = None
     if model is None:
         return True
     try:
@@ -744,7 +752,14 @@ class TiledPixelStore:
 
     @property
     def is_open(self) -> bool:
-        return self._memmap is not None
+        # ``getattr``, not ``self._memmap``: ``release_spill_mapping`` removes
+        # the attribute from ``__dict__`` while it flushes/closes the mapping,
+        # and a concurrent reader (the pyramid registry's sweep runs on the GUI
+        # thread while a worker closes a store) must read "closed", not raise
+        # ``AttributeError``. That raise broke every pyramid build kick with
+        # ``'_SharedView' object has no attribute '_memmap'`` (owner report
+        # 2026-11-15) and left the loading toast hanging forever.
+        return getattr(self, "_memmap", None) is not None
 
     def lease(self):
         from shared.image_processing.store_lease import StoreLease

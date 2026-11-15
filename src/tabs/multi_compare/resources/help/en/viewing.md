@@ -13,6 +13,8 @@ Click a **slot** (a grid cell holding one image) to focus it: the rest of the gr
 ### Zoom and pan {#zoom-and-pan}
 
 - **Shared view** — zoom and pan apply to the whole grid, not to each slot separately.
+- **Ctrl+wheel** — zooms the whole scene: the grid and the margins around it scale together, so the layout keeps its proportions. A plain wheel zooms the slot under the cursor.
+- **Save view** — an export option writes exactly this visible region at native resolution; see [Export](help://workspace.multi_compare.export#save-and-export).
 - **Wheel** — zooms from 1.0x to 50x in 1.1x steps; the point under the cursor stays in place.
 - **Pan limits** — panning stops at the edge of the image; at fit size or smaller the view snaps back.
 - **Middle-drag** — drag with the middle mouse button to pan.

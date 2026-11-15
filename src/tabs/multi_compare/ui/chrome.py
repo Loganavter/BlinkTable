@@ -23,6 +23,15 @@ def sync_zoom_indicator(widget) -> None:
     zoom = float(getattr(st, "zoom", 1.0))
     pan_x = float(getattr(st, "pan_x", 0.0))
     pan_y = float(getattr(st, "pan_y", 0.0))
+    # Scene camera first: when the whole composition is zoomed the chip shows
+    # THAT zoom (and its pan decides visibility), because it is the camera the
+    # user last moved and the one ``reset_view`` clears. At identity the chip
+    # falls back to the content zoom exactly as before.
+    scene_zoom = float(getattr(st, "scene_zoom", 1.0))
+    scene_pan_x = float(getattr(st, "scene_pan_x", 0.0))
+    scene_pan_y = float(getattr(st, "scene_pan_y", 0.0))
+    if abs(scene_zoom - 1.0) > 1e-6:
+        zoom, pan_x, pan_y = scene_zoom, scene_pan_x, scene_pan_y
     # Skip redundant Qt churn (setText + reposition + raise per zoom tick):
     # the chip only renders an int percent and a visible/hidden state, so
     # ticks that change neither (pan drift, sub-percent repeats) reuse the
