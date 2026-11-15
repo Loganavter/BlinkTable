@@ -5,25 +5,39 @@ from __future__ import annotations
 from PySide6.QtCore import QRect
 
 from tabs.multi_compare.models import LeafNode, SplitNode
+from tabs.multi_compare.scene.projection import (
+    composition_frame_geometry,
+    scene_camera,
+)
 from tabs.multi_compare.ui import layout_geometry
 
 
 def letterbox_transform(
-    canvas_w: int, canvas_h: int, fb_w: float, fb_h: float
+    canvas_w: int,
+    canvas_h: int,
+    fb_w: float,
+    fb_h: float,
+    *,
+    scene_zoom: float = 1.0,
+    scene_pan: tuple[float, float] = (0.0, 0.0),
 ) -> tuple[float, float, float] | None:
     """Pure letterbox core: ``(sr, ox, oy)`` projecting canvas-px → widget-px.
 
-    Same formula as ``render()``: ``sr = min(fb_w/canvas_w, fb_h/canvas_h)``,
-    ``ox/oy`` are the centering offsets. ``None`` for degenerate inputs —
-    the thin ``canvas_layout`` shell maps that (plus missing state) to its
-    own ``None``.
+    Delegates to :func:`tabs.multi_compare.scene.projection.
+    composition_frame_geometry` — the same call ``build_render_context`` makes
+    — so hit-testing and rendering cannot drift apart, including under the
+    scene camera (``sr`` then carries ``scene_zoom`` and ``ox/oy`` the pan).
+    ``None`` for degenerate inputs — the thin ``canvas_layout`` shell maps
+    that (plus missing state) to its own ``None``.
     """
     if canvas_w <= 0 or canvas_h <= 0 or fb_w <= 0 or fb_h <= 0:
         return None
-    sr = min(fb_w / canvas_w, fb_h / canvas_h)
-    ox = (fb_w - canvas_w * sr) * 0.5
-    oy = (fb_h - canvas_h * sr) * 0.5
-    return sr, ox, oy
+    return composition_frame_geometry(
+        canvas_size=(float(canvas_w), float(canvas_h)),
+        frame_size=(float(fb_w), float(fb_h)),
+        scene_zoom=scene_zoom,
+        scene_pan=scene_pan,
+    )
 
 
 def composition_canvas_size(active_comp, state, sources=None) -> tuple[int, int] | None:
@@ -57,9 +71,11 @@ def canvas_layout(widget) -> tuple[int, int, float, float, float] | None:
     """Return ``(canvas_w, canvas_h, sr, ox, oy)`` for projecting composition
     canvas-px to widget-px using the same letterbox formula as ``render()``.
 
-    ``sr = min(fb_w/canvas_w, fb_h/canvas_h)``; ``ox/oy`` are letterbox
-    offsets. Mirrors :func:`tabs.multi_compare.scene.projection.build_render_context`
-    so hit-testing and rendering are guaranteed to agree.
+    ``sr``/``ox``/``oy`` come from
+    :func:`tabs.multi_compare.scene.projection.composition_frame_geometry`
+    with the widget's scene camera — the exact call
+    :func:`tabs.multi_compare.scene.projection.build_render_context` makes —
+    so hit-testing and rendering are guaranteed to agree, zoomed or not.
 
     Thin impure shell: widget/state reads on top, geometry math delegated
     to :func:`composition_canvas_size` + :func:`letterbox_transform`.
@@ -78,8 +94,14 @@ def canvas_layout(widget) -> tuple[int, int, float, float, float] | None:
     if size is None:
         return None
     canvas_w, canvas_h = size
+    zoom, pan_x, pan_y = scene_camera(widget.state)
     transform = letterbox_transform(
-        canvas_w, canvas_h, float(widget.width()), float(widget.height())
+        canvas_w,
+        canvas_h,
+        float(widget.width()),
+        float(widget.height()),
+        scene_zoom=zoom,
+        scene_pan=(pan_x, pan_y),
     )
     if transform is None:
         return None

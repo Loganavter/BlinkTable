@@ -243,6 +243,143 @@ def native_canvas_size(controller) -> tuple[int, int] | None:
     return compute_native_canvas_size(plan.root)
 
 
+def _native_canvas_size_safe(controller) -> tuple[int, int] | None:
+    """``controller._native_canvas_size()`` without raising on a bare fake."""
+    try:
+        size = controller._native_canvas_size()
+    except Exception:
+        return None
+    if not size:
+        return None
+    try:
+        width, height = int(size[0]), int(size[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def save_view_state_fields(controller) -> dict:
+    """The three dialog-state fields the host export dialog reads (save view).
+
+    The scene camera is the tab's camera (``scene/projection.py``); the rect
+    comes from the shared ``visible_view_rect`` helper so the exported crop is
+    exactly the region the canvas shows. save_view_available is False at
+    identity camera: saving "the view" is then the whole composition, i.e. the
+    option would be a no-op (the dialog greys it out rather than promising a
+    crop it would not apply).
+
+    Fail-open: an unknown canvas size yields ``None`` rect/size and an
+    unavailable option, never an exception into the dialog.
+    """
+    # Function-local imports (module style here): keeps this module's import
+    # block — and therefore every line number above — untouched, because the
+    # no-direct-settings-mutation contract pins the pre-existing
+    # ``settings.*`` writes in this file by line number.
+    from shared.image_processing.view_geometry import (
+        visible_view_rect,
+        view_native_size,
+    )
+    from tabs.multi_compare.scene.projection import (
+        scene_camera,
+        scene_camera_is_identity,
+    )
+
+    state = getattr(getattr(controller, "widget", None), "state", None)
+    camera = scene_camera(state)
+    zoom, pan_x, pan_y = camera
+    rect: tuple[int, int, int, int] | None = None
+    size: tuple[int, int] | None = None
+    native = _native_canvas_size_safe(controller)
+    if native is not None:
+        rect = visible_view_rect(native[0], native[1], zoom, pan_x, pan_y)
+        size = view_native_size(native[0], native[1], zoom, pan_x, pan_y)
+    return {
+        "save_view_available": not scene_camera_is_identity(camera),
+        "view_rect": rect,
+        "view_native_size": size,
+    }
+
+
+def _save_view_crop(options: dict) -> tuple[int, int, int, int] | None:
+    """The crop rect an export run must apply, or ``None`` for the plain path.
+
+    ``options["save_view"]`` is set by the dialog (checkbox) or by
+    :func:`build_quick_export_options` from the persisted setting; the rect is
+    the snapshot the dialog showed. Malformed/absent rects degrade to the
+    historical full-frame path instead of failing the save.
+    """
+    try:
+        if not bool(options.get("save_view")):
+            return None
+        raw = options.get("view_rect")
+        if not raw or len(raw) != 4:
+            return None
+        left, top, width, height = (int(round(float(v))) for v in raw)
+    except (TypeError, ValueError, KeyError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return max(0, left), max(0, top), width, height
+
+
+def _pil_lanczos():
+    """Pillow's LANCZOS resample filter, across Pillow majors."""
+    from PIL import Image
+
+    resampling = getattr(Image, "Resampling", None)
+    if resampling is not None:
+        return resampling.LANCZOS
+    return Image.LANCZOS
+
+
+def compose_export_image(controller, options: dict):
+    """Compose the export frame for ``options`` as a PIL image.
+
+    Single entry for the dialog save and the quick save, so the save-view
+    branch cannot exist in one flow and not the other. Save view renders the
+    composition at its NATIVE canvas size (one canvas px per output px — the
+    density the live view has at scene zoom 1), crops the visible rect the
+    dialog showed, then resamples to ``width`` x ``height`` only when the
+    requested output differs from the crop. Without the option this is the
+    historical compose-at-output-size path, unchanged.
+    """
+    from shared.image_processing.qt_conversion import qimage_to_pil
+
+    width = max(1, int(options["width"]))
+    height = max(1, int(options["height"]))
+    background_color = QColor(*options["background_color"])
+    fill_background = bool(options["fill_background"])
+    rect = _save_view_crop(options)
+    native = _native_canvas_size_safe(controller) if rect is not None else None
+    if rect is None or native is None:
+        image = controller._compose_image(
+            width,
+            height,
+            background_color=background_color,
+            fill_background=fill_background,
+        )
+        return qimage_to_pil(image)
+    image = controller._compose_image(
+        native[0],
+        native[1],
+        background_color=background_color,
+        fill_background=fill_background,
+    )
+    pil_image = qimage_to_pil(image)
+    left, top, crop_w, crop_h = rect
+    left = min(left, max(0, pil_image.width - 1))
+    top = min(top, max(0, pil_image.height - 1))
+    right = min(pil_image.width, left + crop_w)
+    bottom = min(pil_image.height, top + crop_h)
+    if right > left and bottom > top:
+        pil_image = pil_image.crop((left, top, right, bottom))
+    if (pil_image.width, pil_image.height) != (width, height):
+        pil_image = pil_image.resize((width, height), _pil_lanczos())
+    return pil_image
+
+
 def compose_image(
     controller,
     w: int | None = None,
@@ -311,7 +448,7 @@ def export_dialog_state_kwargs(controller) -> dict:
     from domain.qt_adapters import qcolor_to_color
 
     settings = getattr(controller.store, "settings", None)
-    return dict(
+    fields = dict(
         current_language=getattr(settings, "current_language", "en"),
         output_dir=default_dir(controller),
         favorite_dir=getattr(settings, "export_favorite_dir", None),
@@ -333,6 +470,10 @@ def export_dialog_state_kwargs(controller) -> dict:
         ),
         virtual_canvas_active=True,
     )
+    # Save-view ("export what the canvas shows"): the scene camera decides both
+    # whether the option is applicable and which rect it would crop.
+    fields.update(save_view_state_fields(controller))
+    return fields
 
 
 def resolve_quick_save_output_dir(controller) -> str:
@@ -363,7 +504,7 @@ def build_quick_export_options(controller) -> dict:
     keep_comment = bool(
         getattr(settings, "export_comment_keep_default", False)
     ) if settings is not None else False
-    return {
+    options = {
         "output_dir": resolve_quick_save_output_dir(controller),
         "file_name": "multi_compare",
         "format": (
@@ -390,6 +531,32 @@ def build_quick_export_options(controller) -> dict:
         "height": max(1, int(round(native_h * scale))),
         "is_quick_save": True,
     }
+    # Persisted "save view" preference: when the scene camera is zoomed, a
+    # quick save writes what the canvas shows (native-density crop), not the
+    # whole composition. Absent setting = off; identity camera = option has
+    # nothing to crop, so it stays off too.
+    from shared.image_processing.view_geometry import (
+        visible_view_rect,
+        view_native_size,
+    )
+    from tabs.multi_compare.scene.projection import (
+        scene_camera,
+        scene_camera_is_identity,
+    )
+
+    save_view_pref = bool(
+        getattr(settings, "export_save_view", False)
+    ) if settings is not None else False
+    camera = scene_camera(getattr(getattr(controller, "widget", None), "state", None))
+    if save_view_pref and not scene_camera_is_identity(camera):
+        zoom, pan_x, pan_y = camera
+        rect = visible_view_rect(native_w, native_h, zoom, pan_x, pan_y)
+        view_w, view_h = view_native_size(native_w, native_h, zoom, pan_x, pan_y)
+        options["save_view"] = True
+        options["view_rect"] = rect
+        options["width"] = max(1, int(round(view_w * scale)))
+        options["height"] = max(1, int(round(view_h * scale)))
+    return options
 
 
 def has_exportable_pixels(controller) -> bool:
@@ -447,15 +614,8 @@ def on_quick_save_requested(controller) -> None:
         return
     try:
         options = build_quick_export_options(controller)
-        image = controller._compose_image(
-            int(options["width"]),
-            int(options["height"]),
-            background_color=QColor(*options["background_color"]),
-            fill_background=bool(options["fill_background"]),
-        )
-        from shared.image_processing.qt_conversion import qimage_to_pil
-
-        controller._get_save_flow().start_save_worker(qimage_to_pil(image), options)
+        pil_image = compose_export_image(controller, options)
+        controller._get_save_flow().start_save_worker(pil_image, options)
     except Exception:
         logger.exception("Multi Compare quick save failed")
 
@@ -563,16 +723,7 @@ def start_composite_save(controller, result_code, options: dict) -> None:
     if int(result_code) != int(QDialog.DialogCode.Accepted):
         return
     try:
-        image = controller._compose_image(
-            int(options["width"]),
-            int(options["height"]),
-            background_color=QColor(*options["background_color"]),
-            fill_background=bool(options["fill_background"]),
-        )
-
-        from shared.image_processing.qt_conversion import qimage_to_pil
-
-        pil_image = qimage_to_pil(image)
+        pil_image = compose_export_image(controller, options)
 
         persist_export_preferences(controller, options)
         controller._get_save_flow().start_save_worker(pil_image, options)

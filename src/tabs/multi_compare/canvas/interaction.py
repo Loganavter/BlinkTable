@@ -25,6 +25,8 @@ from tabs.multi_compare.canvas.gesture_resolver import (
 from tabs.multi_compare.debug import mc_dnd_debug, mc_dnd_debug_enabled
 from tabs.multi_compare.models import CompareSlot, LeafNode
 from tabs.multi_compare.scene import actions
+from tabs.multi_compare.scene.projection import clamp_scene_pan, scene_camera
+from tabs.multi_compare.ui import hit_projection
 from tabs.multi_compare.ui.canvas_helpers import INTERNAL_SLOT_MIME, _dividers_locked
 from ui.context_menu.manager import open_context_menu
 from ui.context_menu.models import ContextMenuRequest, ContextMenuTarget
@@ -253,12 +255,114 @@ def _swallow_focus_dim_click(widget, pos: QPoint) -> bool:
     return True
 
 
+def _event_modifiers(event):
+    """Modifiers of a Qt input event, fail-open.
+
+    Test fakes (and any event object that only mirrors ``key()``) have no
+    ``modifiers()``; reading through this helper keeps every existing
+    unmodified binding byte-identical. Same for events whose ``modifiers()``
+    raises during teardown.
+    """
+    getter = getattr(event, "modifiers", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:
+            pass
+    return Qt.KeyboardModifier.NoModifier
+
+
+def _ctrl_held(event) -> bool:
+    return bool(_event_modifiers(event) & Qt.KeyboardModifier.ControlModifier)
+
+
+def _scene_composition_a(widget, canvas_w: float, canvas_h: float, zoom: float):
+    """Fraction of the framebuffer the composition covers at ``zoom``.
+
+    ``a = canvas * fit * zoom / framebuffer`` per axis (``fit`` = the
+    composition letterbox fit). The scene camera's anchor math is expressed
+    in these units: at identity the composition covers ``canvas*fit`` and
+    each zoom step grows it by ``zoom``.
+    """
+    fb_w = max(1.0, float(widget.width()))
+    fb_h = max(1.0, float(widget.height()))
+    fit = min(fb_w / canvas_w, fb_h / canvas_h)
+    return (
+        canvas_w * fit * zoom / fb_w,
+        canvas_h * fit * zoom / fb_h,
+    )
+
+
+def _scene_zoom_tick(widget, event: QWheelEvent, delta: int) -> None:
+    """Ctrl+wheel: zoom the whole composition, anchored under the cursor.
+
+    Separate (and first) branch of :func:`handle_wheel_event` — the content
+    zoom below stays byte-for-byte. Same rules as the content path: scale by
+    the delta magnitude (120 units/notch), clamp to ``[1, ZOOM_MAX]``, swallow
+    sub-epsilon changes, snap pan to the origin at the floor, and dispatch at
+    most one action per tick.
+
+    Anchor: with ``a`` the framebuffer fraction the composition covers,
+    ``screen_uv - 0.5 = a * (canvas_uv - 0.5 + pan)``, so holding the point
+    under the cursor still means ``pan' = pan + (s - 0.5) * (1/a' - 1/a)``
+    (``s`` = cursor in framebuffer-normalized units). Pan is clamped to
+    ``|pan| <= (zoom-1)/(2*zoom)`` per axis, which is exactly the range where
+    the shader's content-UV test still passes across the whole viewport —
+    i.e. the viewport never shows void.
+    """
+    layout = hit_projection.canvas_layout(widget)
+    if layout is None:
+        event.ignore()
+        return
+    canvas_w = max(1.0, float(layout[0]))
+    canvas_h = max(1.0, float(layout[1]))
+    fb_w = max(1.0, float(widget.width()))
+    fb_h = max(1.0, float(widget.height()))
+
+    zoom1, pan_x, pan_y = scene_camera(widget.state)
+    notches = delta / 120.0
+    zoom2 = max(1.0, min(float(widget.ZOOM_MAX), zoom1 * widget.ZOOM_STEP**notches))
+    if abs(zoom2 - zoom1) <= _ZOOM_IDENTICAL_EPS:
+        # IC parity (``compute_zoom_wheel_transform`` swallows <= 1e-6):
+        # invisible change -- no dispatch, no render, no composition rebuild.
+        event.accept()
+        return
+
+    if zoom2 <= 1.0:
+        # At the floor the whole composition is in view -- a carried pan would
+        # only fake a shift (same snap as the content path's ZOOM_MIN branch).
+        new_pan_x, new_pan_y = 0.0, 0.0
+    else:
+        a1_x, a1_y = _scene_composition_a(widget, canvas_w, canvas_h, zoom1)
+        a2_x, a2_y = _scene_composition_a(widget, canvas_w, canvas_h, zoom2)
+        if a1_x <= 0.0 or a1_y <= 0.0:
+            event.accept()
+            return
+        s_x = event.position().x() / fb_w
+        s_y = event.position().y() / fb_h
+        new_pan_x = pan_x + (s_x - 0.5) * (1.0 / a2_x - 1.0 / a1_x)
+        new_pan_y = pan_y + (s_y - 0.5) * (1.0 / a2_y - 1.0 / a1_y)
+        new_pan_x, new_pan_y = clamp_scene_pan(new_pan_x, new_pan_y, zoom2)
+
+    # One dispatch per tick (same as the content path). No LOD demand call:
+    # the scene camera moves the whole composition in the frame, it does not
+    # change any slot's on-screen texel density (that is the content zoom's
+    # ``demand_for_zoom_widget`` fan-out).
+    widget._do_dispatch(actions.set_scene_zoom(zoom2, new_pan_x, new_pan_y))
+    event.accept()
+
+
 def handle_wheel_event(widget, event: QWheelEvent) -> None:
     debug_ticks = mc_dnd_debug_enabled()
     tick_t0 = time.perf_counter() if debug_ticks else 0.0
     delta = event.angleDelta().y()
     if delta == 0:
         event.accept()
+        return
+    if _ctrl_held(event):
+        # Ctrl+wheel is the scene camera; everything below is the untouched
+        # content-zoom path (same chord grammar as Ctrl+drag / Ctrl+arrows).
+        _scene_zoom_tick(widget, event, delta)
         return
     leaf_rects = widget._leaf_rects()
     if not leaf_rects:
@@ -525,6 +629,17 @@ def handle_mouse_press_event(widget, event: QMouseEvent) -> None:
             return
 
     if event.button() == Qt.MouseButton.MiddleButton:
+        if _ctrl_held(event):
+            # Ctrl+middle-drag moves the scene camera instead of the content
+            # pan. State is seeded here (start pan + cursor in widget px), the
+            # delta math runs in ``handle_mouse_move_event``.
+            widget._scene_panning = True
+            widget._scene_pan_start_pos = event.position()
+            _zoom, scene_pan_x, scene_pan_y = scene_camera(widget.state)
+            widget._scene_pan_start_state = (scene_pan_x, scene_pan_y)
+            widget.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
         widget._panning = True
         widget._pan_start_pos = event.position()
         widget._pan_start_state = (widget.state.pan_x, widget.state.pan_y)
@@ -561,6 +676,29 @@ def handle_mouse_move_event(widget, event: QMouseEvent) -> None:
         if consumed:
             event.accept()
             return
+
+    if getattr(widget, "_scene_panning", False):
+        zoom, _pan_x, _pan_y = scene_camera(widget.state)
+        layout = hit_projection.canvas_layout(widget)
+        if layout is None:
+            event.accept()
+            return
+        # Composition size in widget px at this camera (``sr`` already carries
+        # the scene zoom), so a pixel drag converts straight into scene-pan
+        # units: dragging right moves the composition right under the cursor.
+        comp_w = max(1e-6, float(layout[0]) * float(layout[2]))
+        comp_h = max(1e-6, float(layout[1]) * float(layout[2]))
+        delta = event.position() - widget._scene_pan_start_pos
+        new_pan_x = widget._scene_pan_start_state[0] + delta.x() / comp_w
+        new_pan_y = widget._scene_pan_start_state[1] + delta.y() / comp_h
+        new_pan_x, new_pan_y = clamp_scene_pan(new_pan_x, new_pan_y, zoom)
+        if (
+            new_pan_x != widget._scene_pan_start_state[0]
+            or new_pan_y != widget._scene_pan_start_state[1]
+        ):
+            widget._do_dispatch(actions.set_scene_pan(new_pan_x, new_pan_y))
+        event.accept()
+        return
 
     if widget._panning:
         ref = widget._pan_ref_rect
@@ -605,6 +743,13 @@ def handle_mouse_release_event(widget, event: QMouseEvent) -> None:
             binding.end(widget)
         ended_any = True
     if ended_any:
+        event.accept()
+        return
+    if event.button() == Qt.MouseButton.MiddleButton and getattr(
+        widget, "_scene_panning", False
+    ):
+        widget._scene_panning = False
+        widget.setCursor(Qt.CursorShape.ArrowCursor)
         event.accept()
         return
     if event.button() == Qt.MouseButton.MiddleButton and widget._panning:
@@ -712,8 +857,61 @@ def _apply_keyboard_zoom(widget, key) -> None:
         pass
 
 
+def _apply_keyboard_scene_zoom(widget, key) -> None:
+    """Ctrl+``+``/``-``: scene zoom around the viewport center.
+
+    Centered means the pan is carried unchanged (the point at the viewport
+    center stays fixed by construction of ``s = 0.5``), then clamped to the
+    new legal window; the floor snaps it to the origin, mirroring the content
+    path's ``_apply_keyboard_zoom``.
+    """
+    factor = widget.ZOOM_STEP if key in _KEY_ZOOM_IN else 1.0 / widget.ZOOM_STEP
+    zoom1, pan_x, pan_y = scene_camera(widget.state)
+    zoom2 = max(1.0, min(float(widget.ZOOM_MAX), zoom1 * factor))
+    if zoom2 == zoom1:
+        return
+    if zoom2 <= 1.0:
+        new_pan_x, new_pan_y = 0.0, 0.0
+    else:
+        new_pan_x, new_pan_y = clamp_scene_pan(pan_x, pan_y, zoom2)
+    widget._do_dispatch(actions.set_scene_zoom(zoom2, new_pan_x, new_pan_y))
+
+
+def _apply_keyboard_scene_pan(widget, key) -> None:
+    """Ctrl+arrows: scene pan by ``KEY_PAN_NUDGE`` of the *visible* window.
+
+    ``1/zoom`` is the visible window's width in composition units, so the
+    nudge keeps a fixed on-screen distance at any scene zoom (same intent as
+    the content pan's ``nudge / (fit * zoom)``).
+    """
+    zoom, pan_x, pan_y = scene_camera(widget.state)
+    if zoom <= 1.0:
+        return
+    dx = -1 if key == Qt.Key.Key_Left else (1 if key == Qt.Key.Key_Right else 0)
+    dy = -1 if key == Qt.Key.Key_Up else (1 if key == Qt.Key.Key_Down else 0)
+    step = _KEY_PAN_NUDGE / zoom
+    new_x, new_y = clamp_scene_pan(pan_x + dx * step, pan_y + dy * step, zoom)
+    if new_x != pan_x or new_y != pan_y:
+        widget._do_dispatch(actions.set_scene_pan(new_x, new_y))
+
+
 def handle_key_press_event(widget, event) -> None:
     key = event.key()
+    if _ctrl_held(event):
+        # Ctrl chords are the scene camera: zoom the whole composition,
+        # pan it, or reset BOTH cameras. Plain keys keep their meaning.
+        if key in _KEY_ZOOM_IN or key in _KEY_ZOOM_OUT:
+            _apply_keyboard_scene_zoom(widget, key)
+            event.accept()
+            return
+        if key in _KEY_PAN:
+            _apply_keyboard_scene_pan(widget, key)
+            event.accept()
+            return
+        if key == Qt.Key.Key_0:
+            widget._do_dispatch(actions.reset_view())
+            event.accept()
+            return
     if key == Qt.Key.Key_Escape and widget.state.is_focused:
         widget._do_dispatch(actions.set_focus(None))
         event.accept()
