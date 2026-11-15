@@ -75,6 +75,18 @@ def persist_export_preferences(controller, options: dict) -> None:
         settings.export_fill_background = bool(options["fill_background"])
     if "resolution_scale" in options:
         settings.export_resolution_scale = float(options["resolution_scale"])
+    # "Save view" is a dispatched scalar (the direct-write ratchet pins the
+    # legacy assignments in this function by line number). Dispatching keeps
+    # quick save and the next dialog in step with what the user chose.
+    try:
+        from core.state_management.actions import SetExportSaveViewAction
+
+        controller.store.get_dispatcher().dispatch(
+            SetExportSaveViewAction(bool(options.get("save_view", False))),
+            scope="settings",
+        )
+    except Exception:
+        pass
     if "comment_text" in options:
         settings.export_comment_text = options["comment_text"]
     if "comment_keep_default" in options:
@@ -471,8 +483,13 @@ def export_dialog_state_kwargs(controller) -> dict:
         virtual_canvas_active=True,
     )
     # Save-view ("export what the canvas shows"): the scene camera decides both
-    # whether the option is applicable and which rect it would crop.
+    # whether the option is applicable and which rect it would crop. The
+    # remembered choice is the persisted scalar; the dialog hides the option
+    # when the camera is at identity, so a stale True is inert.
     fields.update(save_view_state_fields(controller))
+    fields["save_view"] = bool(
+        getattr(settings, "export_save_view", False)
+    )
     return fields
 
 

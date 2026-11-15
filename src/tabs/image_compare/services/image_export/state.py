@@ -79,6 +79,9 @@ class ExportStateCoordinator:
             crop_to_image=bool(
                 getattr(settings, "export_crop_to_image", False)
             ),
+            # Remembered checkbox state. The dialog hides the option when the
+            # tab cannot report a view rect, so a stale True is inert.
+            save_view=bool(getattr(settings, "export_save_view", False)),
             background_color=getattr(settings, "export_background_color", None),
             comment_text=getattr(settings, "export_comment_text", "") or "",
             comment_keep_default=bool(
@@ -159,6 +162,16 @@ class ExportStateCoordinator:
 
         self.store.get_dispatcher().dispatch(
             SetExportCropToImageAction(bool(export_opts.get("crop_to_image", False))),
+            scope="settings",
+        )
+        # Same dispatched-scalar path for "save view": the dialog owns the
+        # choice, quick save and the next dialog read it back from settings.
+        # Dispatched (not assigned) on purpose — the direct-write ratchet pins
+        # the legacy assignments above by line number.
+        from core.state_management.actions import SetExportSaveViewAction
+
+        self.store.get_dispatcher().dispatch(
+            SetExportSaveViewAction(bool(export_opts.get("save_view", False))),
             scope="settings",
         )
 
