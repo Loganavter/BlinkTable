@@ -14,7 +14,15 @@ from engine.store.tiled_pixel_store import TiledPixelStore
 from tabs.multi_compare.pipeline import cache as mc_cache
 
 class _Store(TiledPixelStore):
-    """TiledPixelStore identity without a real memmap (never opened)."""
+    """TiledPixelStore identity without a real memmap.
+
+    ``is_open`` is declared (not inherited): ``TiledPixelStore.is_open`` reads
+    the real mapping, and a double that skips ``__init__`` has none — it must
+    stand for an OPEN store here, or the cache's usability gate drops it (the
+    sibling ``_ClosedStore`` below is the explicit opposite).
+    """
+
+    is_open = True
 
     def __init__(self) -> None:
         pass
@@ -33,6 +41,7 @@ class _SizedStore(TiledPixelStore):
 
     width = 800
     height = 600
+    is_open = True
 
     def __init__(self) -> None:
         pass
