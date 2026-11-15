@@ -368,13 +368,15 @@ def release_spill_mapping(owner) -> bool:
     of a reference count, so the decision does not depend on how many
     temporaries a caller happens to hold.
     """
+    had_mapping = "_memmap" in owner.__dict__
     model = owner.__dict__.pop("_memmap", None)
-    # Re-publish the closed state IMMEDIATELY: the pop above is the only
-    # instant in which ``_memmap`` is absent, and a reader on another thread
-    # (``is_open`` from the pyramid registry sweep) must never see that shape.
-    # ``finally`` below re-sets it for the normal path; this line closes the
-    # window the flush/close work below would otherwise widen.
-    owner._memmap = None
+    if had_mapping:
+        # Re-publish the closed state IMMEDIATELY: the pop above is the only
+        # instant in which ``_memmap`` is absent, and a reader on another
+        # thread (``is_open`` from the pyramid registry sweep) must never see
+        # that shape. ``finally`` below re-sets it for the normal path; this
+        # line closes the window the flush/close work would otherwise widen.
+        owner.__dict__["_memmap"] = None
     if model is None:
         return True
     try:
