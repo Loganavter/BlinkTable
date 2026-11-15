@@ -84,7 +84,7 @@ def settings_get_stroke(store) -> dict:
     """Current loupe outline / detection-ring thickness (capability alias).
 
     The settings dialog seeds its two rows through this: the UI layer may not
-    import a canvas feature (``test_canvas_features_imports``), so it asks the
+    import a canvas feature (``test_canvas_features_imports.py``), so it asks the
     registry for ``overlay.settings.get_stroke`` instead.
     """
     if store is None or getattr(store, "viewport", None) is None:

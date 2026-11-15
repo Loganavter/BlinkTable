@@ -307,7 +307,7 @@ def _mc_transform(
         # it is what scales the projection below, so reporting the content
         # camera here made the read claim "identity" while the projection was
         # visibly zoomed (measured live 2026-11-15). The per-slot content
-        # camera stays visible on each pane as ``layer_zoom``/``layer_pan``.
+        # camera stays visible on each pane as the layer_zoom / layer_pan fields.
         "camera": {
             "zoom": _num(_scene_camera(state)[0], 1.0),
             "pan": [_num(_scene_camera(state)[1]), _num(_scene_camera(state)[2])],

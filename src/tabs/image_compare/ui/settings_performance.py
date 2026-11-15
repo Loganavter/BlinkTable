@@ -163,7 +163,7 @@ def seed_magnifier_stroke_payload(source) -> dict:
     """Seed the two rows from the live feature state (store -> dialog).
 
     Through the capability alias, never a canvas-feature import: the settings
-    UI is shared code (``test_canvas_features_imports``).
+    UI is shared code (``test_canvas_features_imports.py``).
     """
     try:
         from ui.canvas_infra.scene.registry import get_canvas_registry
