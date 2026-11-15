@@ -1,14 +1,14 @@
 """Visible-view geometry for zoomed exports ("save view") — one source.
 
-Both canvases map a *canvas-space* point ``c`` (0..1) to screen uv ``s`` with
-the same affine form::
+Both compare canvases map a *canvas-space* point ``c`` (0..1) to screen uv
+``s`` with the same affine form::
 
     s = (c - 0.5 + pan) * zoom + 0.5
 
-image_compare: ``base_array.vert`` (``screenUV = (targetUV - center + offset)
-* zoom + center``). multi_compare: the per-slot form of the same chain
-(``multi_compare.frag`` inverts it as ``uv = (uv - 0.5)/zoom + 0.5 - pan``) and,
-for the scene camera added by this feature, the composition projection.
+That is the single-view canvas's base vertex shader (``screenUV = (targetUV -
+center + offset) * zoom + center``), the per-slot form of the same chain in the
+multi-view canvas's fragment shader (inverted there as ``uv = (uv - 0.5)/zoom +
+0.5 - pan``), and the composition projection of its scene camera.
 
 A "save view" export writes exactly the region visible on screen, at native
 density: one canvas pixel per output pixel. Inverting the form over
