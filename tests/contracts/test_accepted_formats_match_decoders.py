@@ -82,18 +82,18 @@ def _jxl_decodes_here() -> bool:
         return True
     # imagecodecs exposes no ``jxl`` symbol (measured: no attribute, no
     # ``jxl_version()``) even when its codec dispatch has one, so capability has
-    # to be probed BEHAVIOURALLY. A 2x2 encode into a memory buffer costs ~10 ms
-    # once per run and proves the codec is actually loaded, which no attribute
-    # check can.
+    # to be probed BEHAVIOURALLY. Ask the app's own probe instead of writing a
+    # second one here: the local ``imwrite(..., codec="jxl")`` shape was
+    # rejected by imagecodecs 2026.x ("no imagecodec specified") while its
+    # dedicated ``jpegxl_encode`` works, so this gate reported "no decoder" on a
+    # machine that had one and the Fast tier went red for a false negative
+    # (measured 2026-11-15). One probe, one answer.
     try:
-        import io
+        from shared.image_processing.format_capability import (
+            jxl_encoder_available,
+        )
 
-        import imagecodecs
-        import numpy as np
-
-        buffer = io.BytesIO()
-        imagecodecs.imwrite(buffer, np.zeros((2, 2, 3), np.uint8), codec="jxl")
-        return len(buffer.getvalue()) > 0
+        return bool(jxl_encoder_available())
     except Exception:
         return False
 
