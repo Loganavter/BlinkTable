@@ -253,6 +253,11 @@ def test_resolve_gate_holds_preview_until_needed_tier_ready(monkeypatch, tmp_pat
     from tabs.multi_compare.pipeline import cache as mc_cache
 
     class _GatedStore(TiledPixelStore):
+        # Declared, not inherited: the double skips ``__init__``, so the real
+        # ``is_open`` (which reads the mapping) would read it as closed and the
+        # cache's usability gate would drop it before the pyramid gate ran.
+        is_open = True
+
         def __init__(self):
             pass
 
