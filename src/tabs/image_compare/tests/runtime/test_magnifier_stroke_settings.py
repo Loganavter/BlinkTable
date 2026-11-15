@@ -9,7 +9,7 @@ Owner request 2026-11-04. Two different strokes with two different homes:
 
 The settings dialog carries them through ``tab_extras`` (the host layer may not
 name a tab concept — ``test_ui_tab_sandbox``), and the UI reads the current
-values through a capability alias (``test_canvas_features_imports``).
+values through a capability alias (``test_canvas_features_imports.py``).
 """
 
 from __future__ import annotations
