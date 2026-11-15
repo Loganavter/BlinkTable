@@ -121,6 +121,11 @@ _PRESCALE_RESAMPLE_ALLOW_LIST = frozenset(
         "prescale_target",
         "prescaled",
         "resample",
+        # Save view (plan-scene-zoom-export, seam featchore/scene-zoom-export-view):
+        # the post-crop resize of an already-rendered frame to a typed
+        # resolution. Not a source prescale — the crop itself always renders at
+        # the plan's native canvas size.
+        "resample_image",
         "resolve_prescale_target",
         "write_resampled_to_store",
         # Task-named out-of-scope helpers (no /prescale|resample|downscale/
@@ -143,6 +148,11 @@ _KNOWN_SUSPICIOUS_CALLS = frozenset(
         "SnapshotLodTiles",
         "TileTextureService",
         "_resample_for_method",
+        # Save view: one shared geometry call (``visible_view_rect``) and the
+        # post-crop resize (``resample_image``) — not export LOD/tile
+        # decisions, which stay in the engine and are pinned above.
+        "resample_image",
+        "visible_view_rect",
         "get_resample",
         "level",
         "plan_tiles_for_grid",
