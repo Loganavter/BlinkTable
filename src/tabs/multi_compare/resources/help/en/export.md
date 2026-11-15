@@ -12,6 +12,7 @@ The grid saves as a single image, and the session keeps the grid so it returns w
 - **Save Grid** — opens the save dialog through **Find Action**; see [Export](help://workspace.export).
 - **Result** — the saved image shows the grid as it appears on screen.
 - **Crop** — each slot's crop is applied before the slots are combined.
+- **Save view** — writes only the region the viewport shows, zoom and pan included, at native resolution: what you see is the file's pixel grid. **Crop** and **Save view** replace each other, because both change what the saved picture is a crop of.
 - **Empty slots** — slots without an image are left out of the saved image.
 
 :::figure{side=block width=100%}

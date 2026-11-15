@@ -88,6 +88,13 @@ _MOCK_ROOTS = frozenset({"monkeypatch", "mock", "mocker", "patch"})
 #: (``export_crop_to_image``) was migrated to ``SetExportCropToImageAction``
 #: instead of being pinned, so the ratchet caught it rather than the re-pin
 #: laundering it.
+#:
+#: Pin refreshed 2026-11-15 (scene-zoom save-view): ``export_save_view`` added
+#: one load line to the same un-migrated ``load_all_settings`` block, so that
+#: one site is pinned like its 39 siblings (the whole function is a bootstrap
+#: writer by design — see the module docstring) and the lines below it moved by
+#: one. The store-side write path for the same setting is NOT pinned: it goes
+#: through ``SetExportSaveViewAction``.
 ALLOWLIST: frozenset[str] = frozenset({
     "src/plugins/settings/manager.py:448",
     "src/plugins/settings/manager.py:449",
@@ -115,19 +122,20 @@ ALLOWLIST: frozenset[str] = frozenset({
     "src/plugins/settings/manager.py:508",
     "src/plugins/settings/manager.py:511",
     "src/plugins/settings/manager.py:514",
-    "src/plugins/settings/manager.py:517",
+    "src/plugins/settings/manager.py:515",
     "src/plugins/settings/manager.py:518",
-    "src/plugins/settings/manager.py:521",
+    "src/plugins/settings/manager.py:519",
     "src/plugins/settings/manager.py:522",
-    "src/plugins/settings/manager.py:525",
-    "src/plugins/settings/manager.py:528",
+    "src/plugins/settings/manager.py:523",
+    "src/plugins/settings/manager.py:526",
     "src/plugins/settings/manager.py:529",
-    "src/plugins/settings/manager.py:532",
-    "src/plugins/settings/manager.py:535",
-    "src/plugins/settings/manager.py:538",
-    "src/plugins/settings/manager.py:541",
-    "src/plugins/settings/manager.py:544",
-    "src/plugins/settings/manager.py:547",
+    "src/plugins/settings/manager.py:530",
+    "src/plugins/settings/manager.py:533",
+    "src/plugins/settings/manager.py:536",
+    "src/plugins/settings/manager.py:539",
+    "src/plugins/settings/manager.py:542",
+    "src/plugins/settings/manager.py:545",
+    "src/plugins/settings/manager.py:548",
     "src/tabs/image_compare/plugins/video_editor/presenter_parts/output_paths.py:108",
     "src/tabs/image_compare/services/image_export/state.py:118",
     "src/tabs/image_compare/services/image_export/state.py:119",

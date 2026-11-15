@@ -16,7 +16,9 @@
     "select_output_directory": "选择输出目录",
     "export_first_frame": "仅导出第一帧",
     "crop_to_image": "按图像裁剪",
-    "crop_to_image_tooltip": "导出图像内容：应用检测到的裁剪窗口，并裁掉对比四周的空白边缘。"
+    "crop_to_image_tooltip": "导出图像内容：应用检测到的裁剪窗口，并裁掉对比四周的空白边缘。",
+    "save_view": "保存视图",
+    "save_view_tooltip": "导出视口当前显示的区域（含缩放与平移），按原始分辨率输出：文件的每个像素对应画布的一个像素。"
   },
   "tooltip": {
     "use_favorite": "使用收藏"
