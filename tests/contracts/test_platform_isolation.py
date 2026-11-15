@@ -97,9 +97,6 @@ ALLOWLIST: frozenset[str] = frozenset(
         "src/shared/canvas/keyboard_constants.py",
         "src/shared/image_processing/export_encoding.py",
         "src/shared/image_processing/image_dims.py",
-        # Save-view geometry: one helper for both canvases; its docstring names
-        # the shaders it mirrors (prose only, no tab import or code path).
-        "src/shared/image_processing/view_geometry.py",
         "src/shared/image_processing/pixel_cache_loader.py",
         "src/services/io/recent_projects.py",
         "src/services/io/project_preview.py",
