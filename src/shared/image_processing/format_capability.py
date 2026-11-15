@@ -108,9 +108,42 @@ class _JxlBackend:
     ``accepts_sink`` records whether the probed write went through a file-like
     object, which decides between a truly cancelable streaming write and the
     encode-then-copy fallback.
+
+    ``encode_to_bytes`` records that the working encoder is the dedicated
+    ``jpegxl_encode`` function rather than the generic ``imwrite``. imagecodecs
+    2026.x wheels reject ``imwrite(..., codec="jxl")`` outright ("no imagecodec
+    specified") while ``jpegxl_encode`` keeps working (measured 2026-11-15 on
+    2026.11.11, the version a fresh ``requirements-gui.txt`` install resolves
+    to) — without this the format silently disappeared from every export UI.
     """
 
     accepts_sink: bool
+    encode_to_bytes: bool = False
+
+
+def _jxl_encode_bytes(imagecodecs: Any, arr: Any, codec_kwargs: dict) -> bytes:
+    """Encode *arr* to JXL bytes through whichever API this build exposes.
+
+    The dedicated ``jpegxl_encode`` is tried FIRST: it is the stable name, and
+    a build without libjxl raises there exactly like it did through the generic
+    writer. ``imwrite`` stays as the fallback for builds that predate the
+    dedicated function.
+    """
+    encode = getattr(imagecodecs, "jpegxl_encode", None)
+    if callable(encode):
+        kwargs = {k: v for k, v in codec_kwargs.items() if k != "codec"}
+        data = encode(arr, **kwargs)
+        if not data:
+            raise RuntimeError("imagecodecs wrote no JXL bytes")
+        return bytes(data)
+    import io
+
+    buffer = io.BytesIO()
+    imagecodecs.imwrite(buffer, arr, **codec_kwargs)
+    data = buffer.getvalue()
+    if not data:
+        raise RuntimeError("imagecodecs wrote no JXL bytes")
+    return data
 
 
 def _probe_jxl_encode(imagecodecs: Any, arr: Any, **codec_kwargs: Any) -> bytes | None:
@@ -120,15 +153,10 @@ def _probe_jxl_encode(imagecodecs: Any, arr: Any, **codec_kwargs: Any) -> bytes 
     libjxl is missing raises here, and the format is then honestly reported as
     unavailable instead of being offered and crashing at save time.
     """
-    import io
-
     try:
-        buffer = io.BytesIO()
-        imagecodecs.imwrite(buffer, arr, **codec_kwargs)
-        data = buffer.getvalue()
+        return _jxl_encode_bytes(imagecodecs, arr, codec_kwargs)
     except Exception:
         return None
-    return data or None
 
 
 @lru_cache(maxsize=1)
@@ -146,7 +174,12 @@ def _jxl_backend() -> _JxlBackend | None:
     probe = np.zeros((2, 2, 3), dtype=np.uint8)
     kwargs: dict[str, Any] = {"codec": "jxl", "lossless": True}
     if _probe_jxl_encode(imagecodecs, probe, **kwargs) is not None:
-        return _JxlBackend(accepts_sink=True)
+        # The dedicated encoder writes bytes, so there is no streaming sink to
+        # feed; the generic writer (older builds) still accepts one.
+        return _JxlBackend(
+            accepts_sink=not callable(getattr(imagecodecs, "jpegxl_encode", None)),
+            encode_to_bytes=callable(getattr(imagecodecs, "jpegxl_encode", None)),
+        )
     # Sink unsupported: retry through a scratch file to separate "libjxl works,
     # imwrite wants a path" from "no JXL encoder at all".
     directory = tempfile.mkdtemp(prefix="imgsli-jxl-probe-")
@@ -172,6 +205,18 @@ def _jxl_backend() -> _JxlBackend | None:
         except OSError:
             pass
     return None
+
+
+def jxl_encoder_available() -> bool:
+    """True when this build can really write JXL (probed, not merely importable).
+
+    Public so a capability gate asks the SAME question the export UI asks: the
+    contract test that re-checks ``.jxl`` in ``ACCEPTED_IMAGE_EXTENSIONS`` used
+    its own ``imwrite(codec="jxl")`` probe, which imagecodecs 2026.x rejects —
+    the gate then reported "no decoder" on a machine whose ``jpegxl_encode``
+    works, and the Fast tier went red for a false negative.
+    """
+    return _jxl_backend() is not None
 
 
 def _alternative_backends() -> dict[str, bool]:
@@ -288,6 +333,9 @@ def _encode_jxl(
     if progress_callback is not None:
         progress_callback(progress_start)
 
+    backend = _jxl_backend()
+    encode_to_bytes = bool(backend is not None and backend.encode_to_bytes)
+
     if isinstance(target, (str, os.PathLike)):
         full_path = os.fspath(target)
         tmp_path = f"{full_path}.tmp"
@@ -297,7 +345,12 @@ def _encode_jxl(
         except OSError:
             pass
         try:
-            imagecodecs.imwrite(tmp_path, arr, **codec_kwargs)
+            if encode_to_bytes:
+                data = _jxl_encode_bytes(imagecodecs, arr, codec_kwargs)
+                with open(tmp_path, "wb") as handle:
+                    handle.write(data)
+            else:
+                imagecodecs.imwrite(tmp_path, arr, **codec_kwargs)
             if cancel_event is not None and cancel_event.is_set():
                 raise RuntimeError(SAVE_CANCELED_MESSAGE)
             os.replace(tmp_path, full_path)
@@ -310,7 +363,29 @@ def _encode_jxl(
             raise
         return
 
-    backend = _jxl_backend()
+    if encode_to_bytes:
+        data = _jxl_encode_bytes(imagecodecs, arr, codec_kwargs)
+        expected = max(1, len(data))
+        written = 0
+        offset = 0
+        while offset < len(data):
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError(SAVE_CANCELED_MESSAGE)
+            chunk = data[offset : offset + _COPY_CHUNK_BYTES]
+            offset += len(chunk)
+            target.write(chunk)
+            written += len(chunk)
+            if progress_callback is not None:
+                progress_callback(
+                    pil_save.progress_from_bytes_written(
+                        written,
+                        expected,
+                        progress_start=progress_start,
+                        progress_end=progress_end,
+                    )
+                )
+        return
+
     if backend is not None and backend.accepts_sink:
         stream = _CancelableStream(
             target,

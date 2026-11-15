@@ -79,7 +79,14 @@ def _imagecodecs_writes_jxl() -> bool:
     except Exception:
         return False
     probe = np.zeros((2, 2, 3), dtype=np.uint8)
+    # The dedicated encoder first: imagecodecs 2026.x rejects
+    # ``imwrite(..., codec="jxl")`` ("no imagecodec specified") while
+    # ``jpegxl_encode`` works, and a gate that only knew the old spelling
+    # reported "no JXL encoder" on a machine that had one (measured 2026-11-15).
+    encode = getattr(imagecodecs, "jpegxl_encode", None)
     try:
+        if callable(encode):
+            return bool(encode(probe, lossless=True))
         buffer = io.BytesIO()
         imagecodecs.imwrite(buffer, probe, codec="jxl", lossless=True)
     except Exception:
@@ -373,14 +380,29 @@ _FAKE_JXL_BYTES = b"\xff\x0a" + b"fake-jxl-codestream" * 400
 
 
 class _FakeImageCodecs:
-    """Minimal ``imagecodecs`` stand-in with a controllable sink capability."""
+    """Minimal ``imagecodecs`` stand-in with a controllable API shape.
 
-    def __init__(self, *, accepts_sink: bool) -> None:
+    ``accepts_sink`` models the historical generic writer; ``dedicated`` models
+    the 2026.x shape, where ``imwrite(..., codec="jxl")`` raises
+    ``ValueError("no imagecodec specified")`` and only ``jpegxl_encode``
+    works (measured 2026-11-15 on imagecodecs 2026.11.11).
+    """
+
+    def __init__(self, *, accepts_sink: bool, dedicated: bool = False) -> None:
         self.accepts_sink = accepts_sink
+        self.dedicated = dedicated
         self.calls: list[dict] = []
+        if dedicated:
+            self.jpegxl_encode = self._dedicated_encode  # type: ignore[assignment]
+
+    def _dedicated_encode(self, arr, **kwargs) -> bytes:
+        self.calls.append({"kwargs": kwargs, "api": "jpegxl_encode"})
+        return _FAKE_JXL_BYTES
 
     def imwrite(self, target, arr, **kwargs) -> None:
         self.calls.append({"kwargs": kwargs, "sink": hasattr(target, "write")})
+        if self.dedicated:
+            raise ValueError("no imagecodec specified")
         data = _FAKE_JXL_BYTES
         if hasattr(target, "write"):
             if not self.accepts_sink:
@@ -399,10 +421,12 @@ def fake_imagecodecs(monkeypatch):
 
     from shared.image_processing import format_capability as caps
 
-    def install(accepts_sink: bool) -> _FakeImageCodecs:
-        fake = _FakeImageCodecs(accepts_sink=accepts_sink)
+    def install(accepts_sink: bool, *, dedicated: bool = False) -> _FakeImageCodecs:
+        fake = _FakeImageCodecs(accepts_sink=accepts_sink, dedicated=dedicated)
         module = types.ModuleType("imagecodecs")
         module.imwrite = fake.imwrite  # type: ignore[attr-defined]
+        if dedicated:
+            module.jpegxl_encode = fake.jpegxl_encode  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "imagecodecs", module)
         caps._jxl_backend.cache_clear()
         caps._pillow_writable_formats.cache_clear()
@@ -518,3 +542,29 @@ def test_jxl_write_cancel_leaves_no_file(fake_imagecodecs, tmp_path):
     assert str(excinfo.value) == SAVE_CANCELED_MESSAGE
     assert not target.exists()
     assert not (tmp_path / "canceled.jxl.tmp").exists()
+
+
+def test_jxl_survives_the_imagecodecs_2026_api_shape(fake_imagecodecs, tmp_path):
+    """The dedicated encoder is enough; the generic writer is not required.
+
+    imagecodecs 2026.x raises ``ValueError("no imagecodec specified")`` for
+    ``imwrite(..., codec="jxl")`` while ``jpegxl_encode`` works — a build with
+    only that shape must still offer JXL and write a real file, or the format
+    silently disappears from every export UI (measured 2026-11-15).
+    """
+    fake = fake_imagecodecs(accepts_sink=False, dedicated=True)
+
+    assert "JXL" in writable_formats()
+
+    target = tmp_path / "out.jxl"
+    encode(
+        Image.new("RGB", (8, 8), (1, 2, 3)),
+        path_or_sink=str(target),
+        image_format="JXL",
+        save_kwargs={"quality": 95},
+    )
+
+    assert target.exists() and target.stat().st_size > 0
+    assert any(call.get("api") == "jpegxl_encode" for call in fake.calls), (
+        "the write must go through the dedicated encoder on this shape"
+    )
