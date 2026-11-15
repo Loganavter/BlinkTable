@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
@@ -600,3 +601,25 @@ def test_mcp_tool_is_one_read_only_live_tool(qapp, tmp_path):
     assert payload["source"] == "live"
     assert payload["scene_source"] == "ic_scene"
     assert "get_canvas_scene" in LiveBackend.READ_METHODS
+
+
+def test_mc_scene_reports_the_scene_camera_not_the_content_camera(qapp, tmp_path, monkeypatch):
+    """The transform-level camera must be the one that scales the projection.
+
+    Measured live 2026-11-15: with the scene camera at 1.33 the dump reported
+    ``camera.zoom == 1.0`` (the content camera) while ``projection.scale`` was
+    visibly scaled — a read that contradicts the pixels it describes.
+    """
+    fixture = _mc_fixture(qapp)
+    canvas = fixture.canvas
+    canvas.state = dataclasses.replace(
+        canvas.state, scene_zoom=1.33, scene_pan_x=0.1, scene_pan_y=0.0
+    )
+    handlers = _handlers(tmp_path, page=fixture.page)
+    scene = _read(handlers, monkeypatch, page=fixture.page, tab="multi_compare")
+
+    camera = scene["transform"]["camera"]
+    assert camera["zoom"] == pytest.approx(1.33)
+    assert camera["pan"] == pytest.approx([0.1, 0.0])
+    content = scene["transform"]["content_camera"]
+    assert content["zoom"] == pytest.approx(1.0)
