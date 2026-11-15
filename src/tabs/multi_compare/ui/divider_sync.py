@@ -25,6 +25,8 @@ _VIEW_ONLY_ACTIONS = frozenset(
     {
         "multi_compare/set_zoom",
         "multi_compare/set_pan",
+        "multi_compare/set_scene_zoom",
+        "multi_compare/set_scene_pan",
         "multi_compare/reset_view",
     }
 )

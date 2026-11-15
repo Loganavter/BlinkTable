@@ -41,6 +41,8 @@ def composition_frame_geometry(
     canvas_size: tuple[float, float],
     frame_size: tuple[float, float],
     tile_origin: tuple[float, float] = (0.0, 0.0),
+    scene_zoom: float = 1.0,
+    scene_pan: tuple[float, float] = (0.0, 0.0),
 ) -> tuple[float, float, float]:
     """``(scale, ox, oy)`` of the composition inside one render frame.
 
@@ -59,12 +61,28 @@ def composition_frame_geometry(
     Mixing a logical (``QWidget.resize``) number into this for one and a
     device number for another is precisely the units defect this helper exists
     to prevent: the composition then covers only ``1/DPR²`` of the frame.
+
+    ``scene_zoom``/``scene_pan`` are the whole-composition camera (the same
+    convention as the content camera, one level up: ``screen_uv =
+    (canvas_uv - 0.5 + pan) * zoom + 0.5``). Folding them into ``scale`` and
+    ``ox/oy`` keeps every consumer — base-image letterbox, dividers, labels,
+    hit-testing — reading one geometry, so cursor and pixels cannot desync.
+    Identity ``(1.0, (0.0, 0.0))`` reproduces the plain letterbox exactly.
     """
     canvas_w, canvas_h = (max(1.0, float(v)) for v in canvas_size)
     frame_w, frame_h = float(frame_size[0]), float(frame_size[1])
-    scale = min(frame_w / canvas_w, frame_h / canvas_h)
-    ox = (frame_w - canvas_w * scale) * 0.5 - float(tile_origin[0])
-    oy = (frame_h - canvas_h * scale) * 0.5 - float(tile_origin[1])
+    zoom = float(scene_zoom)
+    if not (zoom > 0.0) or zoom != zoom:  # non-finite / non-positive → identity
+        zoom = 1.0
+    try:
+        pan_x, pan_y = float(scene_pan[0]), float(scene_pan[1])
+    except (TypeError, ValueError, IndexError):
+        pan_x, pan_y = 0.0, 0.0
+    scale = min(frame_w / canvas_w, frame_h / canvas_h) * zoom
+    ox = (frame_w - canvas_w * scale) * 0.5
+    oy = (frame_h - canvas_h * scale) * 0.5
+    ox += pan_x * canvas_w * scale - float(tile_origin[0])
+    oy += pan_y * canvas_h * scale - float(tile_origin[1])
     return scale, ox, oy
 
 
@@ -88,6 +106,67 @@ def layer_fit_scale(image, rect_w: float, rect_h: float) -> tuple[float, float]:
     return img_ar / cell_ar, 1.0
 
 
+def scene_pan_limit(zoom: object) -> float:
+    """Largest legal ``|pan|`` per axis at ``zoom`` so no void is shown.
+
+    Inverting the camera (``screen_uv = (canvas_uv - 0.5 + pan) * zoom + 0.5``)
+    over ``screen_uv in [0, 1]`` requires the visible window to stay inside
+    the canvas, which holds exactly for ``|pan| <= (zoom-1)/(2*zoom)``.
+    Identity zoom has no room to pan at all (``0.0``).
+    """
+    try:
+        z = float(zoom)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if not (z > 1.0) or z != z:
+        return 0.0
+    return (z - 1.0) / (2.0 * z)
+
+
+def clamp_scene_pan(
+    pan_x: object,
+    pan_y: object,
+    zoom: object,
+) -> tuple[float, float]:
+    """Clamp a scene-camera pan to the range where the viewport shows no void."""
+    limit = scene_pan_limit(zoom)
+    out = []
+    for value in (pan_x, pan_y):
+        try:
+            out.append(max(-limit, min(limit, float(value))))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            out.append(0.0)
+    return out[0], out[1]
+
+
+def scene_camera(state) -> tuple[float, float, float]:
+    """``(zoom, pan_x, pan_y)`` of the whole-composition camera on ``state``.
+
+    The one reader every consumer uses (projection, hit-testing, indicator,
+    save-view export), so a state object that predates the camera fields —
+    or an export widget with no state at all — reads as identity instead of
+    raising. Out-of-range values are repaired here rather than at each call
+    site: ``zoom`` below 1 would reveal void and a pan past the limit would
+    show the frame edge, so both are clamped to the legal window.
+    """
+    try:
+        zoom = float(getattr(state, "scene_zoom", 1.0))
+    except (TypeError, ValueError):
+        zoom = 1.0
+    if not (zoom >= 1.0) or zoom != zoom:
+        zoom = 1.0
+    pan_x = getattr(state, "scene_pan_x", 0.0)
+    pan_y = getattr(state, "scene_pan_y", 0.0)
+    pan_x, pan_y = clamp_scene_pan(pan_x, pan_y, zoom)
+    return zoom, pan_x, pan_y
+
+
+def scene_camera_is_identity(camera: tuple[float, float, float]) -> bool:
+    """True when the camera is at its identity (nothing to save as a view)."""
+    zoom, pan_x, pan_y = camera
+    return abs(zoom - 1.0) <= 1e-9 and abs(pan_x) <= 1e-9 and abs(pan_y) <= 1e-9
+
+
 def build_render_context(
     *,
     composition,
@@ -103,6 +182,18 @@ def build_render_context(
     export_viewport = None
     if widget is not None:
         export_viewport = getattr(widget, "_export_canvas_viewport", None)
+    # Scene camera: live renders follow the widget's state; the offscreen
+    # export canvas is a *separate* widget whose state is identity, and a
+    # tiled export viewport deliberately re-bases the projection itself — so
+    # the camera is read only when no export viewport is in play. That keeps
+    # export at identity by construction (a save-view crop renders the native
+    # frame and crops it, see ``use_cases/export.py``) while an explicit
+    # cropped export view could still pass a camera through a widget state.
+    scene_zoom, scene_pan_x, scene_pan_y = 1.0, 0.0, 0.0
+    if widget is not None and export_viewport is None:
+        scene_zoom, scene_pan_x, scene_pan_y = scene_camera(
+            getattr(widget, "state", None)
+        )
     layers = []
     canvas_w = 1
     canvas_h = 1
@@ -122,6 +213,8 @@ def build_render_context(
             scale, ox, oy = composition_frame_geometry(
                 canvas_size=(float(canvas_w), float(canvas_h)),
                 frame_size=(fb_w, fb_h),
+                scene_zoom=scene_zoom,
+                scene_pan=(scene_pan_x, scene_pan_y),
             )
         layers = list(composition.layers)
 
