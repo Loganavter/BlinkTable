@@ -159,18 +159,33 @@ def _live_unified_stores(controller) -> list[tuple]:
 
 
 def _legacy_start_build(coord, store, slot_id, slot_toast_live, should_abort) -> bool:
-    """Eager kick with today's toast-live wiring (fallback path, unchanged)."""
+    """Eager kick with today's toast-live wiring (fallback path).
+
+    Never raises: a kick that blows up (a closed store mid-sweep, a coordinator
+    that rejects the shape) reports ``False`` so the caller can settle the
+    toast instead of leaving it hanging — the failure this function used to
+    leak as ``AttributeError: '_SharedView' object has no attribute '_memmap'``
+    (owner report 2026-11-15).
+    """
     try:
-        return bool(
-            coord.start_build(
-                store,
-                slot_id=slot_id,
-                toast_live=slot_toast_live,
-                should_abort=should_abort,
+        try:
+            return bool(
+                coord.start_build(
+                    store,
+                    slot_id=slot_id,
+                    toast_live=slot_toast_live,
+                    should_abort=should_abort,
+                )
             )
+        except TypeError:
+            return bool(coord.start_build(store, slot_id=slot_id))
+    except Exception:
+        _preview_log(
+            "demand_fit_level: legacy kick failed for slot %s (store=%r)",
+            slot_id,
+            type(store).__name__,
         )
-    except TypeError:
-        return bool(coord.start_build(store, slot_id=slot_id))
+        return False
 
 
 def _finish_slot_toast(controller, slot_id) -> None:
@@ -270,7 +285,12 @@ def demand_fit_level(controller, store, slot_id: int) -> bool:
     demand = getattr(coord, "demand_level", None)
     fb_w, fb_h, zoom = _current_view(controller)
     if demand is None or fb_w <= 0 or fb_h <= 0:
-        return _legacy_start_build(coord, store, slot_id, slot_toast_live, should_abort)
+        kicked = _legacy_start_build(coord, store, slot_id, slot_toast_live, should_abort)
+        # Nothing will build: a live toast must not wait forever for a
+        # progress event that can never come.
+        if not kicked and slot_toast_live:
+            _finish_slot_toast(controller, slot_id)
+        return kicked
     if not slot_toast_live:
         # Preview-tier race: today's non-live wiring touches no toast.
         return _legacy_start_build(coord, store, slot_id, slot_toast_live, should_abort)
@@ -287,8 +307,12 @@ def demand_fit_level(controller, store, slot_id: int) -> bool:
         try:
             kicked = bool(demand(store, int(k), slot_id=int(slot_id)))
         except Exception:
+            if slot_toast_live:
+                _finish_slot_toast(controller, slot_id)
             return False
     except Exception:
+        if slot_toast_live:
+            _finish_slot_toast(controller, slot_id)
         return False
     if not kicked:
         _remember_pending_demand(controller, store, slot_id, k)
