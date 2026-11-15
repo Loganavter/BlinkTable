@@ -13,7 +13,7 @@ from shared.image_processing.pil_save import (
     safe_child_path,
     sanitize_export_basename,
 )
-from shared.image_processing.resize import resize_images_processor
+from shared.image_processing.resize import resample_image, resize_images_processor
 from engine.cache import TargetSurfaceSpec, get_effective_export_interpolation_method
 from tabs.image_compare.services.live_snapshot import build_live_frame_snapshot
 from tabs.image_compare.services.snapshot_render_plan_builder import (
@@ -62,6 +62,22 @@ class ExportService:
         bg.paste(image, mask=image.split()[3] if image.mode == "RGBA" else None)
         return bg
 
+    @staticmethod
+    def _export_interpolation_method(store: Store) -> str:
+        """Interpolation a fresh render of this store would use.
+
+        Read from the live snapshot (the same source the export re-render
+        takes it from) so a save-view resize cannot silently pick a different
+        filter than the frame it is resampling.
+        """
+        try:
+            live_snapshot = build_live_frame_snapshot(store)
+            return get_effective_export_interpolation_method(
+                live_snapshot.viewport_state
+            )
+        except Exception:
+            return "LANCZOS"
+
     def export_image(
         self,
         store: Store,
@@ -103,6 +119,20 @@ class ExportService:
         except (TypeError, ValueError):
             override_w = override_h = 0
 
+        # "Save view": crop the frame to the region the dialog published. The
+        # rect is the snapshot the user saw — never re-read the live zoom here
+        # (the dialog is non-modal; the canvas may have moved since).
+        from tabs.image_compare.services.image_export.view_snapshot import (
+            parse_view_rect,
+        )
+
+        save_view_rect = (
+            parse_view_rect(export_options.get("view_rect"))
+            if bool(export_options.get("save_view", False))
+            else None
+        )
+        save_view_active = save_view_rect is not None
+
         plan_size = None
         if current_render_plan is not None:
             cw = int(getattr(current_render_plan, "canvas_w", 0) or 0)
@@ -112,7 +142,12 @@ class ExportService:
         needs_rebuild = (
             current_render_plan is None
             or (
-                override_w > 0
+                # The rect is in canvas px, so a save-view frame must stay at
+                # the plan's native canvas size: rendering at the typed
+                # resolution first would crop the wrong region. The typed size
+                # becomes a post-crop resize below instead.
+                not save_view_active
+                and override_w > 0
                 and override_h > 0
                 and plan_size is not None
                 and plan_size != (override_w, override_h)
@@ -131,7 +166,7 @@ class ExportService:
             )
             if not image1_for_save or not image2_for_save:
                 raise ValueError("Failed to unify images for export.")
-            if override_w > 0 and override_h > 0:
+            if override_w > 0 and override_h > 0 and not save_view_active:
                 target_w = override_w
                 target_h = override_h
             else:
@@ -142,7 +177,7 @@ class ExportService:
                 image1_for_save,
                 image2_for_save,
             )
-            if override_w <= 0 or override_h <= 0:
+            if save_view_active or override_w <= 0 or override_h <= 0:
                 target_w = (
                     int(global_bounds.base_width)
                     + int(global_bounds.pad_left)
@@ -212,7 +247,34 @@ class ExportService:
             progress_callback(25)
 
         img_to_save = final_img
-        if bool(export_options.get("crop_to_image", False)):
+        if save_view_active:
+            # "Save view" wins when both options arrive: the rect is expressed
+            # in the full composition's canvas, so trimming to the image area
+            # as well would crop a region nobody ever saw. (The dialog keeps
+            # the two mutually exclusive; a stale option dict must still be
+            # deterministic.)
+            from tabs.image_compare.services.image_export.content_crop import (
+                crop_to_view_rect,
+            )
+
+            img_to_save = crop_to_view_rect(
+                final_img, save_view_rect, current_render_plan
+            )
+            # The dialog offers the crop's own size by default (the resize is
+            # then a no-op); a typed resolution is honoured as a post-crop
+            # resize so the file keeps the exact region at the asked density.
+            if (
+                override_w > 0
+                and override_h > 0
+                and tuple(img_to_save.size) != (override_w, override_h)
+            ):
+                img_to_save = resample_image(
+                    img_to_save,
+                    (override_w, override_h),
+                    self._export_interpolation_method(store),
+                    False,
+                )
+        elif bool(export_options.get("crop_to_image", False)):
             # Trim to the image area (virtual-canvas pads / letterbox dropped).
             # Done before the fill so a requested fill only reaches transparency
             # INSIDE the kept area; a no-op rect returns the frame untouched.

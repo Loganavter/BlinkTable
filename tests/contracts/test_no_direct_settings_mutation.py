@@ -81,6 +81,11 @@ _MOCK_ROOTS = frozenset({"monkeypatch", "mock", "mocker", "patch"})
 #: Migrate a site to ``dispatch(Set*Action)`` and drop its entry (a stale
 #: entry fails the test).
 #:
+#: Pin refreshed again when the save-view options (``save_view``/``view_rect``
+#: in ``build_quick_export_options``) added lines above this block — the same
+#: kind of move-only refresh, no new direct write (the new option is read
+#: through ``getattr``, never written here).
+#:
 #: Pin refreshed 2026-11-06 after #79 (export crop-to-images) inserted a write
 #: in ``image_export/state.py`` and shifted both that block and the
 #: ``SettingsManager`` load block. The refresh is deliberate: only line
@@ -137,18 +142,18 @@ ALLOWLIST: frozenset[str] = frozenset({
     "src/plugins/settings/manager.py:545",
     "src/plugins/settings/manager.py:548",
     "src/tabs/image_compare/plugins/video_editor/presenter_parts/output_paths.py:108",
-    "src/tabs/image_compare/services/image_export/state.py:118",
-    "src/tabs/image_compare/services/image_export/state.py:119",
     "src/tabs/image_compare/services/image_export/state.py:123",
-    "src/tabs/image_compare/services/image_export/state.py:127",
-    "src/tabs/image_compare/services/image_export/state.py:130",
-    "src/tabs/image_compare/services/image_export/state.py:131",
+    "src/tabs/image_compare/services/image_export/state.py:124",
+    "src/tabs/image_compare/services/image_export/state.py:128",
     "src/tabs/image_compare/services/image_export/state.py:132",
+    "src/tabs/image_compare/services/image_export/state.py:135",
     "src/tabs/image_compare/services/image_export/state.py:136",
     "src/tabs/image_compare/services/image_export/state.py:137",
-    "src/tabs/image_compare/services/image_export/state.py:139",
-    "src/tabs/image_compare/services/image_export/state.py:140",
+    "src/tabs/image_compare/services/image_export/state.py:141",
+    "src/tabs/image_compare/services/image_export/state.py:142",
+    "src/tabs/image_compare/services/image_export/state.py:144",
     "src/tabs/image_compare/services/image_export/state.py:145",
+    "src/tabs/image_compare/services/image_export/state.py:150",
     "src/tabs/multi_compare/use_cases/export.py:65",
     "src/tabs/multi_compare/use_cases/export.py:67",
     "src/tabs/multi_compare/use_cases/export.py:68",

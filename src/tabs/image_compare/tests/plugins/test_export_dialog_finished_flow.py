@@ -80,6 +80,12 @@ def _fake_presenter(*, has_images: bool = True):
         _tr=lambda key, default=None: default or key,
     )
     fake._open_export_dialog = MethodType(ExportPresenter._open_export_dialog, fake)
+    fake._publish_view_state = MethodType(ExportPresenter._publish_view_state, fake)
+    fake._canvas_view_state = MethodType(ExportPresenter._canvas_view_state, fake)
+    fake._resolve_tab_contract = MethodType(
+        ExportPresenter._resolve_tab_contract, fake
+    )
+
     fake._start_save_after_dialog = MethodType(
         ExportPresenter._start_save_after_dialog, fake
     )
