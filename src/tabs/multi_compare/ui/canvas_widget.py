@@ -168,6 +168,11 @@ class MultiCompareCanvasWidget(QRhiWidget):
         self._pan_start_state = (0.0, 0.0)
         self._pan_ref_rect = QRect()
         self._pan_ref_fit = (1.0, 1.0)
+        # Scene-camera drag (Ctrl+middle drag): seeded on press, the delta math
+        # lives in canvas/interaction.py's move handler.
+        self._scene_panning = False
+        self._scene_pan_start_pos = QPointF()
+        self._scene_pan_start_state = (0.0, 0.0)
 
         self._divider_drag: tuple[tuple[int, ...], int, str, list[float]] | None = None
         self._divider_start_cursor = QPointF()

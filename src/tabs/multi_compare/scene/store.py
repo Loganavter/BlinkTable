@@ -133,6 +133,23 @@ class SetPan(MultiCompareAction):
 
 
 @dataclass(frozen=True)
+class SetSceneZoom(MultiCompareAction):
+    """Whole-composition camera zoom (``MultiCompareState.scene_zoom``)."""
+
+    zoom: float
+    pan_x: float
+    pan_y: float
+
+
+@dataclass(frozen=True)
+class SetScenePan(MultiCompareAction):
+    """Whole-composition camera pan, in the zoomed viewport's units."""
+
+    pan_x: float
+    pan_y: float
+
+
+@dataclass(frozen=True)
 class ResetView(MultiCompareAction):
     pass
 
@@ -268,6 +285,21 @@ class actions:
     @staticmethod
     def set_pan(pan_x: float, pan_y: float) -> SetPan:
         return SetPan(type="multi_compare/set_pan", pan_x=pan_x, pan_y=pan_y)
+
+    @staticmethod
+    def set_scene_zoom(zoom: float, pan_x: float, pan_y: float) -> SetSceneZoom:
+        return SetSceneZoom(
+            type="multi_compare/set_scene_zoom",
+            zoom=zoom,
+            pan_x=pan_x,
+            pan_y=pan_y,
+        )
+
+    @staticmethod
+    def set_scene_pan(pan_x: float, pan_y: float) -> SetScenePan:
+        return SetScenePan(
+            type="multi_compare/set_scene_pan", pan_x=pan_x, pan_y=pan_y
+        )
 
     @staticmethod
     def reset_view() -> ResetView:
@@ -468,10 +500,52 @@ def reduce(state: MultiCompareState, action: MultiCompareAction) -> MultiCompare
             return state
         return _replace(state, pan_x=action.pan_x, pan_y=action.pan_y)
 
-    if isinstance(action, ResetView):
-        if state.zoom == 1.0 and state.pan_x == 0.0 and state.pan_y == 0.0:
+    if isinstance(action, SetSceneZoom):
+        # Same no-op guard shape as SetZoom: the wheel tick dispatches at
+        # most one action, and an identical payload must not notify.
+        if (
+            state.scene_zoom == action.zoom
+            and state.scene_pan_x == action.pan_x
+            and state.scene_pan_y == action.pan_y
+        ):
             return state
-        return _replace(state, zoom=1.0, pan_x=0.0, pan_y=0.0)
+        return _replace(
+            state,
+            scene_zoom=action.zoom,
+            scene_pan_x=action.pan_x,
+            scene_pan_y=action.pan_y,
+        )
+
+    if isinstance(action, SetScenePan):
+        if (
+            state.scene_pan_x == action.pan_x
+            and state.scene_pan_y == action.pan_y
+        ):
+            return state
+        return _replace(state, scene_pan_x=action.pan_x, scene_pan_y=action.pan_y)
+
+    if isinstance(action, ResetView):
+        # One reset clears BOTH cameras: the zoom chip's reset button (and
+        # ``Ctrl+0``) is the user's "put the view back" gesture, so leaving a
+        # scene zoom behind would keep the chip visible after a reset.
+        if (
+            state.zoom == 1.0
+            and state.pan_x == 0.0
+            and state.pan_y == 0.0
+            and state.scene_zoom == 1.0
+            and state.scene_pan_x == 0.0
+            and state.scene_pan_y == 0.0
+        ):
+            return state
+        return _replace(
+            state,
+            zoom=1.0,
+            pan_x=0.0,
+            pan_y=0.0,
+            scene_zoom=1.0,
+            scene_pan_x=0.0,
+            scene_pan_y=0.0,
+        )
 
     if isinstance(action, SetDragState):
         # Same equality-guard shape as SetFocus/SetZoom/SetPan above: an

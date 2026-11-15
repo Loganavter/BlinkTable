@@ -1,4 +1,27 @@
 # Audit-Meta: pattern=qdialog-wiring reason="one QDialog layout/signal wiring — size from scaled_px/QSS-free boilerplate"
+"""Still-image export dialog: output path, format, resolution, and the
+canvas-frame options ("crop to images" / "save view").
+
+Two options change what the written file is a picture *of*, so they own the
+resolution base and are mutually exclusive (two crops cannot share one
+preview):
+
+- ``crop_to_image`` — the tab's content rect, pads/letterbox trimmed;
+- ``save_view`` — the region the viewport shows (zoom + pan), at native
+  density. The tab computes the rect with
+  ``shared.image_processing.view_geometry.visible_view_rect`` and hands it in
+  as ``ExportDialogState.view_rect`` / ``view_native_size``.
+
+Accepted options relevant to tab-side writers (quick save included)::
+
+    "save_view": bool            # option really on and available
+    "view_rect": (l, t, w, h) | None   # canvas px, exactly the rect shown
+
+A quick-save path that bypasses this dialog must honour both keys the same
+way the interactive save does — a remembered ``settings.export_save_view``
+that is ignored there would write the full canvas while the dialog promised
+the visible region.
+"""
 import io
 import logging
 from pathlib import Path
@@ -143,6 +166,11 @@ class ExportDialog(ThemedDialog):
         # Cropped variant of the preview (built by the tab when a crop window
         # exists), kept separately so the pane can switch without a re-render.
         self._preview_crop_pixmap: QPixmap | None = None
+        # "Save view" crop, cut from the full preview locally (the tab gives a
+        # rect, not a second raster) and keyed by source+rect so a resize or a
+        # repaint cannot re-copy the pixmap.
+        self._preview_view_pixmap: QPixmap | None = None
+        self._preview_view_key: tuple | None = None
         # The label stretches the source itself on every paint; this gate only
         # bakes one smooth frame for the size the resize settled on. Rebuilding
         # the pixmap per resize frame is what made the pane look "killed and
@@ -297,6 +325,7 @@ class ExportDialog(ThemedDialog):
             (self.checkbox_fill_bg, "export.fill_background", ""),
             (self.btn_bg_color, "export.background_color", ""),
             (self.checkbox_crop_to_image, "export.crop_to_image", ""),
+            (self.checkbox_save_view, "export.save_view", ""),
             (self.checkbox_include_metadata, "export.include_metadata", ""),
             (self.comment_label, "export.comment", ":"),
             (self.checkbox_comment_default, "export.remember_by_default", ""),
@@ -316,6 +345,13 @@ class ExportDialog(ThemedDialog):
                 self._tr(
                     "export.crop_to_image_tooltip",
                     "Keep only the area the images occupy; empty margins are trimmed.",
+                )
+            )
+        if hasattr(self, "checkbox_save_view"):
+            self.checkbox_save_view.setToolTip(
+                self._tr(
+                    "export.save_view_tooltip",
+                    "Export what the viewport shows — zoom and pan included — at native resolution.",
                 )
             )
         if hasattr(self.action_bar, "_apply_button_minimums"):
@@ -408,6 +444,7 @@ class ExportDialog(ThemedDialog):
         translatable_text(
             self.btn_bg_color, "export.background_color", tr_func=trb
         )
+        translatable_text(self.checkbox_save_view, "export.save_view", tr_func=trb)
         translatable_text(
             self.checkbox_include_metadata, "export.include_metadata", tr_func=trb
         )
@@ -477,6 +514,13 @@ class ExportDialog(ThemedDialog):
         self.checkbox_crop_to_image.setChecked(
             bool(getattr(self.dialog_state, "crop_to_image", False))
         )
+        # A remembered choice only applies while the tab can really report a
+        # view rect: otherwise the option stays off and the fields keep
+        # describing the full canvas (behaviour C of the save-view contract).
+        self.checkbox_save_view.setChecked(
+            bool(getattr(self.dialog_state, "save_view", False))
+            and self._save_view_available()
+        )
 
         self.checkbox_include_metadata.setChecked(True)
 
@@ -517,21 +561,78 @@ class ExportDialog(ThemedDialog):
         if path:
             self.edit_dir.setText(path)
 
-    # -- crop to images ----------------------------------------------------
+    # -- crop to images / save view ---------------------------------------
 
     def _crop_to_image_checked(self) -> bool:
         box = getattr(self, "checkbox_crop_to_image", None)
         return bool(box is not None and box.isChecked())
 
+    def _save_view_checked(self) -> bool:
+        box = getattr(self, "checkbox_save_view", None)
+        return bool(box is not None and box.isChecked())
+
+    def _view_rect(self) -> tuple[int, int, int, int] | None:
+        """Tab-owned visible-view rect in canvas px, or ``None``.
+
+        Defensive on purpose: the tabs fill ``view_rect`` themselves, and a
+        malformed/absent value must make the option unavailable rather than
+        raise while the dialog is opening.
+        """
+        raw = getattr(self.dialog_state, "view_rect", None)
+        if raw is None:
+            return None
+        try:
+            left, top, width, height = (int(v) for v in tuple(raw))
+        except (TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        return (left, top, width, height)
+
+    def _view_native_size(self) -> tuple[int, int] | None:
+        """Output size of the visible view (native density), or ``None``."""
+        rect = self._view_rect()
+        raw = getattr(self.dialog_state, "view_native_size", None)
+        size: tuple[int, int] | None = None
+        if raw is not None:
+            try:
+                width, height = (int(v) for v in tuple(raw))
+            except (TypeError, ValueError):
+                width = height = 0
+            if width > 0 and height > 0:
+                size = (width, height)
+        if size is None and rect is not None:
+            # The rect is the source of truth; keep the pair consistent even
+            # when a tab forgot to fill ``view_native_size``.
+            size = (rect[2], rect[3])
+        return size
+
+    def _save_view_available(self) -> bool:
+        """The option needs a real view rect and a canvas to crop."""
+        if not bool(getattr(self.dialog_state, "save_view_available", False)):
+            return False
+        if self._native_width <= 0 or self._native_height <= 0:
+            return False
+        return self._view_rect() is not None
+
     def _effective_native_size(self) -> tuple[int, int]:
-        """Base size the resolution fields describe (canvas or image area)."""
+        """Base size the resolution fields describe (canvas, view, or image area)."""
+        if self._save_view_checked():
+            view = self._view_native_size()
+            if view is not None:
+                return view
         crop = getattr(self.dialog_state, "crop_native_size", None)
         if self._crop_to_image_checked() and crop and crop[0] > 0 and crop[1] > 0:
             return (int(crop[0]), int(crop[1]))
         return (self._native_width, self._native_height)
 
-    def _on_crop_to_image_toggled(self, _checked: bool = False) -> None:
-        """Re-express the resolution at the new base, keeping the user's scale."""
+    def _rebase_resolution(self) -> None:
+        """Re-express the resolution at the new base, keeping the user's scale.
+
+        Both frame options swap the base while the field pair keeps *saying*
+        the same thing: the size of the file that will be written. Pixel
+        numbers are therefore scaled, not preserved.
+        """
         prev_base = self._resolution_base
         new_base = self._effective_native_size()
         try:
@@ -560,12 +661,73 @@ class ExportDialog(ThemedDialog):
                 self._suppress_ratio_recalc = False
         self._apply_preview_pixmap()
 
+    def _uncheck_quietly(self, box) -> None:
+        """Clear a sibling option without re-entering its toggled handler.
+
+        The sibling's handler would rebase the resolution a second time — with
+        a base that is no longer current — so the signal is blocked and the
+        outer handler rebases once, after both boxes settled.
+        """
+        if box is None or not box.isChecked():
+            return
+        box.blockSignals(True)
+        try:
+            box.setChecked(False)
+        finally:
+            box.blockSignals(False)
+
+    def _on_crop_to_image_toggled(self, checked: bool = False) -> None:
+        """Crop and save-view are exclusive: both replace the resolution base."""
+        if checked:
+            self._uncheck_quietly(getattr(self, "checkbox_save_view", None))
+        self._rebase_resolution()
+
+    def _on_save_view_toggled(self, checked: bool = False) -> None:
+        if checked:
+            self._uncheck_quietly(getattr(self, "checkbox_crop_to_image", None))
+        self._rebase_resolution()
+
     def _effective_preview_source(self):
-        """Preview pixmap for the current state (cropped when the option is on)."""
+        """Preview pixmap for the current state (cropped when an option is on)."""
+        if self._save_view_checked():
+            view_preview = self._view_preview_pixmap()
+            if view_preview is not None:
+                return view_preview
         if self._crop_to_image_checked() and self._preview_crop_pixmap is not None:
             if not self._preview_crop_pixmap.isNull():
                 return self._preview_crop_pixmap
         return self._preview_source_pixmap
+
+    def _view_preview_pixmap(self) -> QPixmap | None:
+        """Cut the visible-view region out of the full preview.
+
+        The tab hands over a *rect in canvas px*, not a second raster: the
+        preview already is the whole canvas, so the same rect scaled by the
+        preview's own size is exactly the crop the file will have. Kept keyed
+        by source+rect — ``_apply_preview_pixmap`` runs on every resize
+        settle and must not re-copy a full-size pixmap each time.
+        """
+        source = self._preview_source_pixmap
+        rect = self._view_rect()
+        if source is None or source.isNull() or rect is None:
+            return None
+        canvas_w, canvas_h = self._native_width, self._native_height
+        if canvas_w <= 0 or canvas_h <= 0:
+            return None
+        key = (source.cacheKey(), rect)
+        if key == self._preview_view_key and self._preview_view_pixmap is not None:
+            return self._preview_view_pixmap
+        left, top, width, height = rect
+        scale_x = source.width() / float(canvas_w)
+        scale_y = source.height() / float(canvas_h)
+        px = min(max(0, int(round(left * scale_x))), source.width() - 1)
+        py = min(max(0, int(round(top * scale_y))), source.height() - 1)
+        pw = max(1, min(source.width() - px, int(round(width * scale_x))))
+        ph = max(1, min(source.height() - py, int(round(height * scale_y))))
+        cropped = source.copy(px, py, pw, ph)
+        self._preview_view_key = key
+        self._preview_view_pixmap = None if cropped.isNull() else cropped
+        return self._preview_view_pixmap
 
     def _fill_background_allowed(self) -> bool:
         """Fill only when pads exist (virtual canvas past 0..1) and format has alpha."""
@@ -645,6 +807,7 @@ class ExportDialog(ThemedDialog):
         self.checkbox_crop_to_image.setVisible(
             bool(getattr(self.dialog_state, "crop_to_image_available", False))
         )
+        self.checkbox_save_view.setVisible(self._save_view_available())
         self.checkbox_fill_bg.setVisible(has_transparency)
         self.checkbox_fill_bg.setEnabled(fill_allowed)
         if has_transparency and not fill_allowed:
@@ -862,6 +1025,14 @@ class ExportDialog(ThemedDialog):
             "crop_to_image": bool(
                 self._crop_to_image_checked()
                 and getattr(self.dialog_state, "crop_to_image_available", False)
+            ),
+            "save_view": bool(self._save_view_checked() and self._save_view_available()),
+            # The rect only travels while the option is really on: a hidden or
+            # unavailable option must never crop a tab-side export.
+            "view_rect": (
+                self._view_rect()
+                if self._save_view_checked() and self._save_view_available()
+                else None
             ),
             "virtual_canvas_active": bool(
                 getattr(self.dialog_state, "virtual_canvas_active", True)

@@ -45,6 +45,7 @@ from .actions import (
     SetDraggingSplitLineAction,
     SetExportCropToImageAction,
     SetExportFavoriteDirAction,
+    SetExportSaveViewAction,
     SetFixedLabelDimensionsAction,
     SetImageDisplayRectAction,
     SetInteractionSessionIdAction,
@@ -432,6 +433,10 @@ class SettingsReducer:
             if settings.export_crop_to_image == action.enabled:
                 return settings
             return replace(settings, export_crop_to_image=action.enabled)
+        if isinstance(action, SetExportSaveViewAction):
+            if settings.export_save_view == action.enabled:
+                return settings
+            return replace(settings, export_save_view=action.enabled)
         if isinstance(action, SetKeyboardOverridesAction):
             incoming = dict(action.overrides)
             if dict(settings.keyboard_overrides) == incoming:

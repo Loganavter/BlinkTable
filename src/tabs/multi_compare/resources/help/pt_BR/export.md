@@ -12,6 +12,7 @@ A grade é salva como uma única imagem, e a sessão mantém a grade, então ela
 - **Salvar grade** — abre o diálogo de salvamento por meio de **Localizar ação**; veja [Exportação](help://workspace.export).
 - **Resultado** — a imagem salva mostra a grade como ela aparece na tela.
 - **Crop** — o recorte de cada slot é aplicado antes de os slots serem combinados.
+- **Salvar vista** — grava apenas a região que o visor mostra, com zoom e deslocamento, em resolução nativa: os pixels do arquivo são os pixels da tela de composição. **Crop** e **Salvar vista** se substituem, porque ambos mudam de que parte a imagem salva é um recorte.
 - **Slots vazios** — slots sem imagem ficam de fora da imagem salva.
 
 :::figure{side=block width=100%}

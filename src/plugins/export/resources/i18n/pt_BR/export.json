@@ -16,7 +16,9 @@
     "select_output_directory": "Selecionar Diretório de Saída",
     "export_first_frame": "Apenas o primeiro quadro é exportado",
     "crop_to_image": "Cortar pelas imagens",
-    "crop_to_image_tooltip": "Exporta o conteúdo das imagens: as janelas de corte detectadas são aplicadas e as margens vazias ao redor da comparação são cortadas."
+    "crop_to_image_tooltip": "Exporta o conteúdo das imagens: as janelas de corte detectadas são aplicadas e as margens vazias ao redor da comparação são cortadas.",
+    "save_view": "Salvar vista",
+    "save_view_tooltip": "Exporta o que o visor mostra — com zoom e deslocamento — em resolução nativa: um pixel do arquivo por pixel da tela de composição."
   },
   "tooltip": {
     "use_favorite": "Usar Favorito"

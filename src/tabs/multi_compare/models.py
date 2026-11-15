@@ -153,6 +153,16 @@ class MultiCompareState:
     zoom: float = 1.0
     pan_x: float = 0.0
     pan_y: float = 0.0
+    # Scene camera (``scene/projection.py``): zooms the WHOLE composition
+    # (every slot cell, divider and label moves together), unlike ``zoom``
+    # above which magnifies the image inside one slot cell. Same shader
+    # convention as the content camera -- ``screen_uv = (canvas_uv - 0.5 +
+    # pan) * zoom + 0.5`` -- with ``zoom >= 1`` and pan clamped to
+    # ``|pan| <= (zoom-1)/(2*zoom)`` so the viewport never shows void
+    # (``scene.projection.scene_camera`` owns the clamp).
+    scene_zoom: float = 1.0
+    scene_pan_x: float = 0.0
+    scene_pan_y: float = 0.0
 
     drag_active: bool = False
     drag_target_path: tuple[int, ...] | None = None

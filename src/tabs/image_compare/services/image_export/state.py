@@ -10,10 +10,15 @@ from shared.image_processing.pil_save import next_available_path
 
 
 class ExportStateCoordinator:
-    def __init__(self, store, main_controller, main_window_app):
+    def __init__(self, store, main_controller, main_window_app, get_view_state=None):
         self.store = store
         self.main_controller = main_controller
         self.main_window_app = main_window_app
+        # Late-bound zero-arg callable returning the canvas
+        # ``(zoom, pan_x, pan_y)`` (the presenter resolves it through the tab's
+        # canvas geometry provider at call time). Unset → "save view" cannot be
+        # offered on quick save and options stay exactly as before.
+        self._get_view_state = get_view_state
 
     def get_os_default_downloads(self) -> str:
         # Single source: this module's default_downloads_dir (Qt-resolved);
@@ -74,6 +79,9 @@ class ExportStateCoordinator:
             crop_to_image=bool(
                 getattr(settings, "export_crop_to_image", False)
             ),
+            # Remembered checkbox state. The dialog hides the option when the
+            # tab cannot report a view rect, so a stale True is inert.
+            save_view=bool(getattr(settings, "export_save_view", False)),
             background_color=getattr(settings, "export_background_color", None),
             comment_text=getattr(settings, "export_comment_text", "") or "",
             comment_keep_default=bool(
@@ -156,11 +164,21 @@ class ExportStateCoordinator:
             SetExportCropToImageAction(bool(export_opts.get("crop_to_image", False))),
             scope="settings",
         )
+        # Same dispatched-scalar path for "save view": the dialog owns the
+        # choice, quick save and the next dialog read it back from settings.
+        # Dispatched (not assigned) on purpose — the direct-write ratchet pins
+        # the legacy assignments above by line number.
+        from core.state_management.actions import SetExportSaveViewAction
+
+        self.store.get_dispatcher().dispatch(
+            SetExportSaveViewAction(bool(export_opts.get("save_view", False))),
+            scope="settings",
+        )
 
         if self.main_controller and hasattr(self.main_controller, "settings_manager"):
             self.main_controller.settings_manager.save_all_settings(self.store)
 
-    def build_quick_export_options(self) -> dict:
+    def build_quick_export_options(self, native_size=None) -> dict:
         bg_color = getattr(
             self.store.settings,
             "export_background_color",
@@ -174,7 +192,7 @@ class ExportStateCoordinator:
             f"{self.sanitize_export_name(name2)}"
         )
 
-        return {
+        options = {
             "output_dir": self.resolve_quick_save_output_dir(),
             "file_name": base_name,
             "format": self.store.settings.export_last_format or "PNG",
@@ -204,6 +222,42 @@ class ExportStateCoordinator:
             ),
             "is_quick_save": True,
         }
+
+        # Persisted "save view": a quick save writes what the canvas shows.
+        # The rect is snapshotted HERE, at the moment the save was asked for
+        # (there is no dialog to hold a snapshot across user zooming).
+        options = self._apply_save_view_option(options, native_size)
+        return options
+
+    def _apply_save_view_option(self, options: dict, native_size) -> dict:
+        """Add ``save_view``/``view_rect`` when the persisted setting is on.
+
+        Fail-open: no setting, no canvas size or no live accessor leaves the
+        options byte-identical to before this option existed.
+        """
+        if not bool(getattr(self.store.settings, "export_save_view", False)):
+            return options
+        if self._get_view_state is None or not native_size:
+            return options
+        from tabs.image_compare.services.image_export.view_snapshot import (
+            resolve_view_snapshot,
+        )
+
+        try:
+            zoom_pan = self._get_view_state()
+        except Exception:
+            return options
+        snapshot = resolve_view_snapshot(native_size[0], native_size[1], zoom_pan)
+        if snapshot is None or not snapshot.cropped:
+            return options
+        # crop_to_image off: the view rect lives in the FULL composition's
+        # canvas, so the pair must be the full one (ExportSaveContext.select
+        # applies the same rule for the dialog path).
+        options["save_view"] = True
+        options["view_rect"] = snapshot.rect
+        options["crop_to_image"] = False
+        options["width"], options["height"] = snapshot.size
+        return options
 
     def get_current_display_name(self, image_number: int) -> str:
         document = self.store.get_session_state_slot("document")
