@@ -112,6 +112,23 @@ class DividerPass(CanvasRenderPass):
             return False
         images_uploaded = list(getattr(ctx, "images_uploaded", ()) or ())
         content_rect = getattr(ctx.scene_frame, "content_rect_px", None)
+        try:
+            import logging as _dlog
+            import time as _dtime
+
+            _now = _dtime.monotonic()
+            if _now - getattr(self, "_dbg_last", 0.0) > 1.0:
+                self._dbg_last = _now
+                _dlog.getLogger("ic.div.debug").warning(
+                    f"DIVDBG show={show} thickness={thickness} "
+                    f"uploaded={len(images_uploaded)} "
+                    f"uploaded_vals={[bool(x) for x in images_uploaded]} "
+                    f"content_rect={content_rect} "
+                    f"payloads_keys={sorted((getattr(ctx.scene_frame, 'feature_payloads', None) or {}).keys())} "
+                    f"single_preview={is_single_image_preview_scene(ctx)}"
+                )
+        except Exception:
+            pass
         return bool(
             show
             and thickness > 0.0
