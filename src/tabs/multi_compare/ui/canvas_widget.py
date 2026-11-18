@@ -694,6 +694,16 @@ class MultiCompareCanvasWidget(QRhiWidget):
         focus never evicts a still-loaded slot.
         """
         sources: dict[int, object] = self._slot_sources()
+        try:
+            import logging as _dl, time as _dt
+            _now = _dt.monotonic()
+            if _now - getattr(self, "_dbg_sync", 0.0) > 1.0:
+                self._dbg_sync = _now
+                _dl.getLogger("mc.tex.debug").warning(
+                    "MCSYNC sources=%r" % ({k: type(v).__name__ for k, v in sources.items()},)
+                )
+        except Exception:
+            pass
         if self._active_composition is not None:
             for layer in self._active_composition.layers:
                 if layer.image is not None:

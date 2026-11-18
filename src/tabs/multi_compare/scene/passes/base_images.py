@@ -465,6 +465,14 @@ class BaseImagesPass(CanvasRenderPass):
         for sid in self.pending_removes:
             self._release_slot(tile_service, sid)
         self.pending_removes.clear()
+        try:
+            import logging as _dl
+            if self.pending_uploads:
+                _dl.getLogger("mc.tex.debug").warning(
+                    "MCUPL flush pending=%d" % len(self.pending_uploads)
+                )
+        except Exception:
+            pass
         for sid, source in self.pending_uploads:
             self._upload_slot(renderer, tile_service, sid, source, updates)
         self.pending_uploads.clear()
@@ -1032,6 +1040,16 @@ class BaseImagesPass(CanvasRenderPass):
         trigger) live in the engine, effects bind here.
         """
         host_cache = self._host_cache(renderer)
+        try:
+            import logging as _dl
+            _dl.getLogger("mc.tex.debug").warning(
+                "MCSWAP before sid=%s src=%s size=%s spec_old=%r old_multi=%s"
+                % (sid, type(source).__name__, getattr(spec, "size", None),
+                   type(getattr(spec, "old_source", None)).__name__,
+                   getattr(spec, "old_is_multi", None))
+            )
+        except Exception:
+            pass
         _engine_apply_swap_spec(
             tile_service=tile_service,
             renderer=renderer,
@@ -1042,6 +1060,19 @@ class BaseImagesPass(CanvasRenderPass):
             host_cache=host_cache,
             hooks=self._swap_hooks(renderer, tile_service, host_cache, updates),
         )
+        try:
+            import logging as _dl
+            _grid = tile_service.grid_for(sid)
+            _resident = 0
+            for _k in list(getattr(tile_service, "_resident", {}) or {}):
+                _resident += len(tile_service.resident_tiles(_k) or ())
+            _dl.getLogger("mc.tex.debug").warning(
+                "MCSWAP after sid=%s applied=%s grid=%r resident_total=%d tex=%d"
+                % (sid, self.slot_pixel_sources.get(sid) is source, _grid,
+                   _resident, len(getattr(self.slot_resources, "slot_textures", {})))
+            )
+        except Exception:
+            pass
 
     def _upload_slot(
         self,
