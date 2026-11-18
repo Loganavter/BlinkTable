@@ -98,6 +98,13 @@ class MultiCompareRhiRenderer:
         self.rhi: QRhi | None = None
         self.target = None
         self.sampler: QRhiSampler | None = None
+        # Plain (non-array) tile textures carry ONE mip level, so they must be
+        # sampled without mip filtering: a GL texture with `mipmapMode != None`
+        # and no mip chain is mipmap-INCOMPLETE and samples black (measured
+        # 2026-11-18: every single-tile slot in Multi Compare — any image whose
+        # grid is 1x1, i.e. 512x512 or smaller — painted an opaque black square
+        # while multi-tile slots were fine). See `SlotResources.ensure_tile_srb`.
+        self.plain_sampler: QRhiSampler | None = None
         self.placeholder: QRhiTexture | None = None
         # Same capacity BaseImagesPass sizes its SRB-bound array from: the
         # service must never hand out a layer `tile_arrays[0]` cannot address.
@@ -205,11 +212,12 @@ class MultiCompareRhiRenderer:
         # the tile array's coarsest pyramid level is still routinely shown
         # well below 1:1 (e.g. a 20000px source's ~1024px-capped pyramid
         # floor rendered at a ~240px on-screen thumbnail), where a mip-less
-        # bilinear sample aliases badly on high-frequency content. A texture
-        # with only one real mip level (the non-array per-tile path's
-        # textures) samples level 0 regardless of this filter, so reusing
-        # one sampler everywhere is safe -- see generate_all_dirty_mips for
-        # the array texture's own mip chain.
+        # bilinear sample aliases badly on high-frequency content.
+        #
+        # This sampler is the ARRAY path's only: the non-array per-tile
+        # textures have a single mip level, and a mipmapped filter on such a
+        # texture samples BLACK (mipmap-incomplete, measured 2026-11-18 —
+        # see ``plain_sampler`` below, which is what the plain path binds).
         #
         # Magnification is NEAREST (owner decision 2026-11-04): zoomed past
         # 1:1 the canvas must show source texels as squares, like image
@@ -226,6 +234,14 @@ class MultiCompareRhiRenderer:
             QRhiSampler.AddressMode.ClampToEdge,
         )
         self.sampler.create()
+        self.plain_sampler = new_rhi.newSampler(
+            QRhiSampler.Filter.Nearest,
+            QRhiSampler.Filter.Linear,
+            QRhiSampler.Filter.None_,
+            QRhiSampler.AddressMode.ClampToEdge,
+            QRhiSampler.AddressMode.ClampToEdge,
+        )
+        self.plain_sampler.create()
 
         self.placeholder = new_rhi.newTexture(QRhiTexture.Format.RGBA8, QSize(1, 1))
         self.placeholder.create()
@@ -270,6 +286,7 @@ class MultiCompareRhiRenderer:
             render_pass.release()
         for res in (
             self.sampler,
+            self.plain_sampler,
             self.placeholder,
         ):
             if res is not None:
