@@ -218,6 +218,10 @@ Checked by `tests/devtools/test_docs_link_graph.py`.
 - **[Multi Compare](../../src/tabs/multi_compare/docs/README.md)** — `src/tabs/multi_compare/docs/README.md`
   Referenced by: [src/tabs/multi_compare/docs/plugins/multi_compare.md](../../src/tabs/multi_compare/docs/plugins/multi_compare.md)
 
+## src/tabs/multi_compare/docs/investigations/
+
+- **[Investigation: Multi Compare painted black squares — mipmapped sampler on a single-level texture](../../src/tabs/multi_compare/docs/investigations/plain-texture-mip-incomplete-2026-11-18.md)** — `src/tabs/multi_compare/docs/investigations/plain-texture-mip-incomplete-2026-11-18.md`
+
 ## src/tabs/multi_compare/docs/plugins/
 
 - **[Multi Compare plugin](../../src/tabs/multi_compare/docs/plugins/multi_compare.md)** — `src/tabs/multi_compare/docs/plugins/multi_compare.md`

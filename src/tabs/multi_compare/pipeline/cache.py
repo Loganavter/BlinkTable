@@ -127,11 +127,6 @@ class MultiComparePixelCache:
         if store is None:
             return
         key = cache_key_for_path(path)
-        try:
-            import logging as _dl
-            _dl.getLogger("mc.tex.debug").warning("MCPUT pixel key=%r path=%r" % (key, str(path)))
-        except Exception:
-            pass
         self._pixel[key] = store
         self._bump_generation()
         try:
@@ -231,19 +226,6 @@ class MultiComparePixelCache:
         except Exception:
             return None
         hit = self.get_pixel(path)
-        try:
-            import logging as _dl, time as _dt
-            _now = _dt.monotonic()
-            if _now - getattr(self, "_dbg_res", 0.0) > 2.0:
-                self._dbg_res = _now
-                _dl.getLogger("mc.tex.debug").warning(
-                    "MCRES path=%r key=%r hit=%r preview=%r pix_keys=%r prev_keys=%r"
-                    % (str(path), cache_key_for_path(path), bool(hit),
-                       self.get_preview(path) is not None,
-                       list(self._pixel)[:3], list(self._preview)[:3])
-                )
-        except Exception:
-            pass
         if hit is not None and _pyramid_ready(hit):
             return hit
         preview = self.get_preview(path)

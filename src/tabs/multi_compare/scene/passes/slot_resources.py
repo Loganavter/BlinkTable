@@ -45,6 +45,21 @@ def _tile_key_slot_id(tile_key: object) -> object:
     return tile_key
 
 
+def _plain_sampler(renderer):
+    """Sampler for a non-array tile texture: NO mip filtering.
+
+    Plain tiles are uploaded as a single-level ``QRhiTexture``; sampling one
+    through the array path's mipmapped sampler is mipmap-INCOMPLETE and
+    returns black. Measured 2026-11-18 on a leased instance: every slot whose
+    grid is 1x1 (any image at or below ``SLOT_LIVE_TILE_EXTENT``, e.g. a
+    512x512 pair) painted an opaque black square, while a 2048x2048 slot on
+    the array path painted correctly — the same frame, the same source
+    QImage (``Format_RGBA8888``, correct pixel). Forcing the array path made
+    the 512x512 slot paint, which pinned the plain draw as the broken one.
+    """
+    return getattr(renderer, "plain_sampler", None) or renderer.sampler
+
+
 class SlotResources(PlainTextureResourcesBase):
     """Tab-side plain-path consumer: engine base owns the textures and
     dynamic buffers, this subclass adds the slot graphics pipeline and
@@ -219,7 +234,7 @@ class SlotResources(PlainTextureResourcesBase):
                     0, stages, self.slot_uniform_buffers[index], SLOT_UNIFORM_SIZE
                 ),
                 QRhiShaderResourceBinding.sampledTexture(
-                    1, fragment, texture, renderer.sampler
+                    1, fragment, texture, _plain_sampler(renderer)
                 ),
             ]
         )
@@ -228,22 +243,6 @@ class SlotResources(PlainTextureResourcesBase):
         return srb
 
     def upload_tile(self, renderer, tile_key: object, image, updates) -> None:
-        try:
-            import logging as _dl
-            _c = None
-            try:
-                _c = image.pixelColor(0, 0).getRgb()
-            except Exception:
-                pass
-            _dl.getLogger("mc.tex.debug").warning(
-                "MCUP key=%r image=%s size=%s fmt=%s px0=%r"
-                % (tile_key, type(image).__name__,
-                   (image.width(), image.height()) if image is not None else None,
-                   image.format() if image is not None else None, _c)
-            )
-        except Exception:
-            pass
-
         def _allocate(size: tuple[int, int]):
             tex = renderer.rhi.newTexture(QRhiTexture.Format.RGBA8, QSize(*size))
             tex.create()
