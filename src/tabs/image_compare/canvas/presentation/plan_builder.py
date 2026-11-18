@@ -344,6 +344,27 @@ def build_canvas_plan(
             base_height=base_h,
         )
 
+    if True:
+        import logging as _dbg_logging
+
+        def _dbg_desc(_img):
+            try:
+                _size = getattr(_img, "size", None)
+                _size = list(_size) if isinstance(_size, (tuple, list)) else _size
+            except Exception as _exc:  # noqa: BLE001
+                _size = f"<size err {_exc!r}>"
+            return f"{type(_img).__name__}(size={_size}, tier={type(_img).__module__}.{type(_img).__qualname__})"
+
+        _dbg_logging.getLogger("ic.plan.debug").warning(
+            f"PLANDBG w1={w1} h1={h1} w2={w2} h2={h2} "
+            f"src1={_sw1}x{_sh1} src2={_sw2}x{_sh2} "
+            f"guesses={_guess1}/{_guess2} boxed={_boxed_dims} "
+            f"envelope_dims={envelope_dims} hold={envelope_hold} "
+            f"base={base_w}x{base_h} target={target_size} "
+            f"display1={_dbg_desc(display_image1)} "
+            f"display2={_dbg_desc(display_image2)}"
+        )
+
     canvas_w = target_size[0] if target_size is not None else w1
     canvas_h = target_size[1] if target_size is not None else h1
     content_w = content_size[0] if content_size is not None else canvas_w
