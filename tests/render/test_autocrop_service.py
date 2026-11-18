@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from PIL import Image
 
@@ -304,3 +306,44 @@ def test_loader_no_sticky_none_on_replace(tmp_path):
         second.close()
     finally:
         emb.clear()
+
+
+def test_warmup_reports_completion_including_an_already_warm_cache(tmp_path):
+    """``on_done`` must fire for BOTH a cold and an already-warm service.
+
+    The InfoHUD readout (``512x512 → 312x512``) is derived from the box, and
+    the box arrives asynchronously without dispatching anything to the Store
+    (owner report 2026-11-18: the chip kept the source size while the canvas
+    painted the crop). The completion callback is that missing edge; a
+    silent "already cached" branch would drop it on the second load.
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from shared.image_processing.autocrop.service import schedule_crop_warmup
+
+    app = QApplication.instance() or QApplication([])
+
+    img = Image.new("RGB", (200, 160), (0, 0, 0))
+    img.paste(Image.new("RGB", (120, 80), (200, 180, 160)), (40, 40))
+    path = str(tmp_path / "bordered.png")
+    img.save(path)
+
+    svc = CropService()
+    calls: list[str] = []
+
+    schedule_crop_warmup(svc, [path], on_done=lambda: calls.append("cold"))
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline and not calls:
+        app.processEvents()
+        time.sleep(0.02)
+    assert svc._has_cached(path), "the warmup must have computed the box"
+    assert calls == ["cold"], "a cold warmup owes exactly one completion"
+
+    schedule_crop_warmup(svc, [path], on_done=lambda: calls.append("warm"))
+    assert calls == ["cold", "warm"], (
+        "an already-warm cache must still answer the caller — otherwise the "
+        "HUD never learns about a crop resolved by an earlier load"
+    )

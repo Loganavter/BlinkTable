@@ -179,6 +179,10 @@ Checked by `tests/devtools/test_docs_link_graph.py`.
   Referenced by: [src/tabs/image_compare/docs/README.md](../../src/tabs/image_compare/docs/README.md), [src/tabs/image_compare/docs/plugins/comparison.md](../../src/tabs/image_compare/docs/plugins/comparison.md), [src/tabs/image_compare/docs/plugins/video_editor.md](../../src/tabs/image_compare/docs/plugins/video_editor.md)
 - **[Image Compare](../../src/tabs/image_compare/docs/README.md)** — `src/tabs/image_compare/docs/README.md`
 
+## src/tabs/image_compare/docs/investigations/
+
+- **[Investigation: the crop and the divider were measured with two rulers](../../src/tabs/image_compare/docs/investigations/crop-divider-two-rulers-2026-11-18.md)** — `src/tabs/image_compare/docs/investigations/crop-divider-two-rulers-2026-11-18.md`
+
 ## src/tabs/image_compare/docs/plugins/
 
 - **[Comparison plugin](../../src/tabs/image_compare/docs/plugins/comparison.md)** — `src/tabs/image_compare/docs/plugins/comparison.md`
