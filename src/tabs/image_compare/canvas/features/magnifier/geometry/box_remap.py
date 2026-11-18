@@ -130,7 +130,7 @@ def resolve_crop_boxes_for_store(
     try:
         global_off = not bool(
             getattr(
-                getattr(store, "settings", None), "auto_crop_black_borders", True
+                getattr(store, "settings", None), "auto_crop_black_borders", False
             )
         )
     except Exception:
