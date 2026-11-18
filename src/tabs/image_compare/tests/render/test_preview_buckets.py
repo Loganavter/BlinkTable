@@ -8,7 +8,8 @@ tiered (``PREVIEW_BUCKETS``) and decoded AT the target size — libvips
 downscaled (Qt ``QImageReader.setScaledSize`` semantics).
 
 Guarded here:
-* the bucket ladder (None/garbage/<=0 -> 1024, never above 4096);
+* the bucket ladder (None/garbage/<=0 -> 1024, never above 2048 — the top
+  bucket is capped by the preview RAM budget, not by the screen);
 * the key keeps its historic shape, so an unscaled caller is byte-identical;
 * two buckets of one file are different entries (a pick must not read the
   stale tier);
@@ -35,8 +36,8 @@ from tabs.image_compare.pipeline.cache import (
 # -- bucket ladder --
 
 
-def test_bucket_ladder_is_1024_2048_4096():
-    assert PREVIEW_BUCKETS == (1024, 2048, 4096)
+def test_bucket_ladder_is_1024_2048():
+    assert PREVIEW_BUCKETS == (1024, 2048)
 
 
 def test_bucket_for_none_and_garbage_is_1024():
@@ -58,12 +59,12 @@ def test_bucket_for_small_edges_snap_up_to_the_ladder():
     assert preview_bucket_for(1024) == 1024
     assert preview_bucket_for(1025) == 2048
     assert preview_bucket_for(2048) == 2048
-    assert preview_bucket_for(2049) == 4096
-    assert preview_bucket_for(4096) == 4096
+    assert preview_bucket_for(2049) == 2048
+    assert preview_bucket_for(4096) == 2048
 
 
 def test_bucket_for_never_above_the_largest_bucket():
-    assert preview_bucket_for(5000) == 4096
+    assert preview_bucket_for(5000) == 2048
     assert preview_bucket_for(10**9) == PREVIEW_BUCKETS[-1]
 
 
@@ -84,10 +85,9 @@ def test_preview_key_carries_the_bucket_and_tiers_do_not_collide(tmp_path):
     Image.new("RGBA", (16, 16), (1, 2, 3, 255)).save(f)
     base = _preview_key(str(f))
     big = _preview_key(str(f), None, None, bucket=2048)
-    huge = _preview_key(str(f), None, None, bucket=4096)
-    assert base[4] == 1024 and big[4] == 2048 and huge[4] == 4096
-    assert base[:4] == big[:4] == huge[:4], "file identity prefix unchanged"
-    assert base != big and big != huge, "two buckets are two entries"
+    assert base[4] == 1024 and big[4] == 2048
+    assert base[:4] == big[:4], "file identity prefix unchanged"
+    assert base != big, "two buckets are two entries"
     # Off-ladder values land on the ladder instead of minting a key per pixel.
     assert _preview_key(str(f), None, None, bucket=1500)[4] == 2048
 

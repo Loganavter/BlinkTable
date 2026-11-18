@@ -430,7 +430,7 @@ class ProgressiveImageLoader:
 
     Preview tier lives in PipelineCache with key
     (path,mtime,size,has_crop,box,bucket) — ``bucket`` being the long edge
-    (1024/2048/4096, see ``pipeline/cache.PREVIEW_BUCKETS``); full tier via
+    (1024/2048, see ``pipeline/cache.PREVIEW_BUCKETS``); full tier via
     PipelineCache pixel LRU. Legacy caches removed.
     New code should use PipelineCache directly.
     """

@@ -143,13 +143,18 @@ _PREVIEW_CACHE_MAX = 8
 #: thumbnail spec uses fixed buckets (128/256/512/1024,
 #: https://specifications.freedesktop.org/thumbnail-spec/latest/) invalidated
 #: by mtime+size, which is the shape of the key here.
-PREVIEW_BUCKETS: tuple[int, ...] = (1024, 2048, 4096)
+#:
+#: Why the ladder stops at 2048: previews live IN MEMORY under
+#: ``_PREVIEW_CACHE_MAX_BYTES`` (128 MB), unlike Lightroom's on-disk JPEG
+#: previews, so the top bucket is capped by the RAM budget and not by the
+#: screen (see ``preview_bucket_for`` for the arithmetic).
+PREVIEW_BUCKETS: tuple[int, ...] = (1024, 2048)
 _PREVIEW_SIZE = PREVIEW_BUCKETS[0]
 
 # Byte budgets (count limits above still apply; eviction triggers on either).
 # ~8 × 24MP RGBA (96MB) fits in the pixel/unify budgets; a preview is ~4MB at
-# the 1024 tier and up to ~64MB at 4096, so the preview budget evicts the
-# biggest non-pinned tiers first (count 8 is the real ceiling for 4096 tiers).
+# the 1024 tier and ~16MB at 2048 — the ladder stops there precisely so 8
+# entries (about the pair plus its neighbours) fit this budget.
 _PIXEL_CACHE_MAX_BYTES = 1536 * 1024 * 1024
 _UNIFY_CACHE_MAX_BYTES = 1536 * 1024 * 1024
 _PREVIEW_CACHE_MAX_BYTES = 128 * 1024 * 1024
@@ -168,6 +173,16 @@ def preview_bucket_for(long_edge_px: int | None) -> int:
     freedesktop thumbnail spec's fixed buckets (128/256/512/1024,
     https://specifications.freedesktop.org/thumbnail-spec/latest/, mtime+size
     invalidation) all land on the same shape.
+
+    The ladder stops at 2048 because the budget is RAM, not the screen:
+    previews live in memory under ``_PREVIEW_CACHE_MAX_BYTES`` (128 MB), and a
+    long-edge ``N`` RGBA QImage is ~``N * N * 4`` bytes. 1024 is ~4 MB and
+    2048 ~16 MB, so 2048 holds ~8 entries and an A/B switch between two large
+    images never evicts the pair; 4096 would be ~67 MB, one or two entries,
+    and every switch would evict the other — thrash instead of a cache.
+    Lightroom sustains a bigger screen-sized preview because it keeps a JPEG
+    ON DISK; we do not. A canvas past 2048 therefore gets 2048 — still far
+    sharper than 1024, and the store lands a frame later anyway.
 
     Buckets, not the exact canvas size, on purpose: a window resize must not
     spawn a new cache entry per pixel of drag — the tier comes off a fixed

@@ -60,7 +60,7 @@ def original_pixel_tier(store, slot: int):
         if cand is None:
             return None
         # A preview tier is not a source: handing the loupe a preview-sized
-        # QImage (1024/2048/4096 long edge) when the display path already has
+        # QImage (1024/2048 long edge) when the display path already has
         # the real store would make it blurrier.
         try:
             from engine.store.tiled_pixel_store import is_preview_tier
@@ -86,7 +86,7 @@ def source_role_image(store, slot: int, display_image):
 def is_preview_basis(image) -> bool:
     """True when ``image`` is a preview-tier QImage — a SIZE guess, not pixels.
 
-    A preview is normalised per side to a 1024/2048/4096 long edge, chosen from
+    A preview is normalised per side to a 1024/2048 long edge, chosen from
     the canvas (``pipeline.cache.PREVIEW_BUCKETS``), so its dims do not
     describe the side's source. The live plan uses this to refuse to mix one
     side's preview dims with the other side's real dims: the resulting envelope
