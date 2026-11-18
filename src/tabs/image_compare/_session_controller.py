@@ -73,7 +73,7 @@ class SessionController(SessionApiMixin, QObject):
                 _should = getattr(
                     getattr(self.store, "settings", None),
                     "auto_crop_black_borders",
-                    True,
+                    False,
                 )
                 sess.sync_crop_service(bool(_should))
             except Exception:
@@ -96,7 +96,7 @@ class SessionController(SessionApiMixin, QObject):
 
     def _get_crop_service(self):
         """Вернуть CropService если autocrop включён, иначе None."""
-        should_crop = getattr(self.store.settings, "auto_crop_black_borders", True)
+        should_crop = getattr(self.store.settings, "auto_crop_black_borders", False)
         if not should_crop:
             return None
         # Актуальный сервис из активной сессии
@@ -136,7 +136,7 @@ class SessionController(SessionApiMixin, QObject):
                 getattr(
                     getattr(self.store, "settings", None),
                     "auto_crop_black_borders",
-                    True,
+                    False,
                 )
             )
             if _cur_crop != self._last_crop_enabled:

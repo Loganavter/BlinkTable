@@ -144,7 +144,7 @@ class MultiCompareController:
     def _get_crop_service(self):
         """Вернуть CropService если autocrop включён, иначе None (зеркало IC)."""
         try:
-            should_crop = getattr(self.store.settings, "auto_crop_black_borders", True) if self.store else True
+            should_crop = getattr(self.store.settings, "auto_crop_black_borders", False) if self.store else True
         except Exception:
             should_crop = True
         if not should_crop:
