@@ -77,7 +77,7 @@ class ExportStateCoordinator:
             ),
             fill_background=bool(getattr(settings, "export_fill_background", False)),
             crop_to_image=bool(
-                getattr(settings, "export_crop_to_image", False)
+                getattr(settings, "export_crop_to_image", True)
             ),
             # Remembered checkbox state. The dialog hides the option when the
             # tab cannot report a view rect, so a stale True is inert.
@@ -203,7 +203,7 @@ class ExportStateCoordinator:
                 False,
             ),
             "crop_to_image": bool(
-                getattr(self.store.settings, "export_crop_to_image", False)
+                getattr(self.store.settings, "export_crop_to_image", True)
             ),
             "background_color": bg_color_tuple,
             "png_compress_level": getattr(

@@ -42,7 +42,11 @@ class SettingsState:
     export_last_format: str = "PNG"
     export_quality: int = 95
     export_fill_background: bool = False
-    export_crop_to_image: bool = False
+    # ON by default: the file must be what the canvas shows. The live canvas
+    # applies the pair's crop window, so a default OFF wrote the full frame
+    # (black borders included) while the screen showed the crop — owner
+    # report 2026-11-18: "does the exporter ignore the crop?".
+    export_crop_to_image: bool = True
     export_save_view: bool = False
     export_background_color: Color = field(
         default_factory=lambda: Color(255, 255, 255, 255)
