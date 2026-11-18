@@ -512,8 +512,11 @@ class SettingsManager:
         s.export_fill_background = self._get_setting(
             "export_fill_background", False, bool
         )
+        # ON by default (fresh install): the exported file must match the
+        # canvas, which applies the crop window. An explicit remembered OFF
+        # still wins.
         s.export_crop_to_image = self._get_setting(
-            "export_crop_to_image", False, bool
+            "export_crop_to_image", True, bool
         )
         s.export_save_view = self._get_setting("export_save_view", False, bool)
         s.export_background_color = hex_to_color(

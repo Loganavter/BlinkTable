@@ -61,6 +61,9 @@ def test_persist_export_settings_dispatches_the_crop_scalar():
     the value arrived through dispatch → SettingsReducer → replace.
     """
     store = _live_store()
+    # This test is about the DISPATCH path, not about the default: start from
+    # the opposite value so the first persist is a real change.
+    store.settings.export_crop_to_image = False
     seen: list[str] = []
     store.get_dispatcher().subscribe(lambda action: seen.append(action.type))
     coordinator = ExportStateCoordinator(store, None, None)

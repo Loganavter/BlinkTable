@@ -233,6 +233,10 @@ def test_setting_survives_a_manager_round_trip(qapp, tmp_path):
     writer = _manager_for(ini_path, "improve-imgsli-save-view-w", "save-view-w")
     store = Store()
     store.settings.export_save_view = True
+    # The sibling option carries its OWN value through the round trip; pin it
+    # off explicitly so this stays a key-collision test rather than a default
+    # test (``export_crop_to_image`` defaults ON since 2026-11-18).
+    store.settings.export_crop_to_image = False
     writer.save_all_settings(store)
     writer.settings.sync()
     qapp.processEvents()
@@ -242,4 +246,38 @@ def test_setting_survives_a_manager_round_trip(qapp, tmp_path):
     fresh.load_all_settings(reloaded)
     assert reloaded.settings.export_save_view is True
     # The sibling option keeps its own value (no key collision).
+    assert reloaded.settings.export_crop_to_image is False
+
+
+def test_a_fresh_install_exports_what_the_canvas_shows(qapp, tmp_path):
+    """No stored value → the export follows the canvas (crop windows applied).
+
+    Owner report 2026-11-18: the live canvas applied the pair's crop window
+    while the default export wrote the full frame (black borders included), so
+    "does the exporter ignore the crop?" was a fair question. The crop variant
+    existed all along; its default was OFF.
+    """
+    ini_path = str(tmp_path / "fresh.ini")
+    manager = _manager_for(ini_path, "improve-imgsli-fresh-w", "fresh-w")
+    store = Store()
+
+    manager.load_all_settings(store)
+
+    assert store.settings.export_crop_to_image is True
+
+
+def test_a_remembered_off_still_wins_over_the_canvas_default(qapp, tmp_path):
+    """An explicit OFF is a user decision and survives the next start."""
+    ini_path = str(tmp_path / "remembered.ini")
+    writer = _manager_for(ini_path, "improve-imgsli-off-w", "off-w")
+    store = Store()
+    store.settings.export_crop_to_image = False
+    writer.save_all_settings(store)
+    writer.settings.sync()
+    qapp.processEvents()
+
+    fresh = _manager_for(ini_path, "improve-imgsli-off-r", "off-r")
+    reloaded = Store()
+    fresh.load_all_settings(reloaded)
+
     assert reloaded.settings.export_crop_to_image is False
