@@ -200,7 +200,7 @@ class MultiCompareContextMenuProvider:
             if settings is None:
                 store = getattr(self.widget, "store", None)
                 settings = getattr(store, "settings", None)
-            return bool(getattr(settings, "auto_crop_black_borders", True))
+            return bool(getattr(settings, "auto_crop_black_borders", False))
         except Exception:
             return True
 

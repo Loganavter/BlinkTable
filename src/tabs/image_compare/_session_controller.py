@@ -96,7 +96,7 @@ class SessionController(SessionApiMixin, QObject):
 
     def _get_crop_service(self):
         """Вернуть CropService если autocrop включён, иначе None."""
-        should_crop = getattr(self.store.settings, "auto_crop_black_borders", True)
+        should_crop = getattr(self.store.settings, "auto_crop_black_borders", False)
         if not should_crop:
             return None
         # Актуальный сервис из активной сессии

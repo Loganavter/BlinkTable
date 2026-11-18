@@ -25,7 +25,7 @@ copies:
    hand — but it must agree, or the first unpersisted start behaves unlike the
    declared default.
 3. ``getattr(settings, "<key>", <literal>)`` call sites under ``src/`` are
-   copy #3 (and, for ``auto_crop_black_borders``, six more). They are defensive
+   copy #3 (and, for ``auto_crop_black_borders``, many more). They are defensive
    defaults for a settings object that lacks the field. For a real
    ``SettingsState`` they are dead code, which is exactly why they drift
    unnoticed — and then silently become the default for any detached/snapshot
@@ -79,14 +79,16 @@ FRESH_INSTALL_TEST_REL = "tests/plugins/test_user_defaults_fresh_install.py"
 #: ``getattr(settings, "<key>", <value>)`` sites that still carry the PRE-fix
 #: default, keyed by ``(path, key, observed value)`` with a SITE COUNT.
 #:
-#: All eleven are ``auto_crop_black_borders``: the 2026-11-18 fix flipped the
+#: All eight are ``auto_crop_black_borders``: the 2026-11-18 fix flipped the
 #: dataclass, ``load_all_settings`` and one ``getattr`` in
-#: ``application_service.py``, but not these defensive copies, which still say
-#: "no settings object → crop". They are dead code for a real ``SettingsState``
-#: (the field always exists), which is why the drift survived; flipping each to
-#: ``False`` is a ``src/`` change of its own (this file was written test-only,
-#: by scope). Find the exact lines with
-#: ``grep -n 'getattr(.*auto_crop_black_borders' <path>``.
+#: ``application_service.py``, and a follow-up flipped the three single-line
+#: ``getattr(..., "auto_crop_black_borders", True)`` sites. These eight are the
+#: ones a single-line ``grep 'getattr(.*auto_crop_black_borders'`` cannot see
+#: (the call is wrapped over several lines), which is why they survived both
+#: sweeps. Each still says "no settings object → crop" and is dead code for a
+#: real ``SettingsState`` (the field always exists); flipping it to ``False``
+#: is a ``src/`` change of its own. Find the exact lines by AST (or with
+#: ``grep -n -A3 'getattr($' <path>``).
 #:
 #: The count is the ratchet: a new disagreeing site (even in a listed file) has
 #: no entry left to consume and fails; a repaired site leaves a surplus count
@@ -96,7 +98,7 @@ _KNOWN_FALLBACK_DRIFT: dict[tuple[str, str, bool], int] = {
         "src/tabs/image_compare/_session_controller.py",
         "auto_crop_black_borders",
         True,
-    ): 3,
+    ): 2,
     (
         "src/tabs/image_compare/canvas/features/magnifier/geometry/box_remap.py",
         "auto_crop_black_borders",
@@ -112,8 +114,6 @@ _KNOWN_FALLBACK_DRIFT: dict[tuple[str, str, bool], int] = {
         "auto_crop_black_borders",
         True,
     ): 1,
-    ("src/tabs/multi_compare/context_menu.py", "auto_crop_black_borders", True): 1,
-    ("src/tabs/multi_compare/controller.py", "auto_crop_black_borders", True): 1,
     ("src/tabs/multi_compare/use_cases/crop.py", "auto_crop_black_borders", True): 1,
     (
         "src/tabs/multi_compare/use_cases/loading.py",
