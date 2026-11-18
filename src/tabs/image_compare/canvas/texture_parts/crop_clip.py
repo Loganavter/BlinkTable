@@ -361,17 +361,6 @@ def resolve_slot_boxes(
     """
     svc = crop_service_for_widget(widget, explicit=crop_service)
     path1, path2 = slot_paths_for_widget(widget, source_key=source_key)
-    try:
-        import logging as _dlog, time as _dtime
-        _now = _dtime.monotonic()
-        if _now - getattr(resolve_slot_boxes, "_dbg", 0.0) > 2.0:
-            resolve_slot_boxes._dbg = _now
-            _dlog.getLogger("ic.slots.debug").warning(
-                "SLOTDBG svc=%r path1=%r warmed=%r"
-                % (bool(svc), path1, _is_warmed(svc, path1) if svc is not None and path1 else None)
-            )
-    except Exception:
-        pass
     doc = document if document is not None else _document_for_widget(widget)
     try:
         from tabs.image_compare.state.document import crop_override_for_path

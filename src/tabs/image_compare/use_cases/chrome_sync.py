@@ -643,21 +643,17 @@ class ImageCompareChromeSync(QObject):
         res1_text = ""
         res2_text = ""
         if has_both_images:
+            # The canvas widget (not the tab shell) is what carries the
+            # session-controller backlink the crop service resolves through.
+            canvas_widget = getattr(self.widget, "image_label", None) or self.widget
             if dim := get_image_dimensions(self.store, 1):
                 res1_text = format_resolution_text(
-                    dim, get_effective_dimensions(self.store, 1, self.widget)
+                    dim, get_effective_dimensions(self.store, 1, canvas_widget)
                 )
             if dim := get_image_dimensions(self.store, 2):
                 res2_text = format_resolution_text(
-                    dim, get_effective_dimensions(self.store, 2, self.widget)
+                    dim, get_effective_dimensions(self.store, 2, canvas_widget)
                 )
-        try:
-            import logging as _dlog
-            _dlog.getLogger("ic.hud.debug").warning(
-                "HUDDBG res1=%r res2=%r" % (res1_text, res2_text)
-            )
-        except Exception:
-            pass
         try:
             self.widget.update_resolution_labels(
                 res1_text,

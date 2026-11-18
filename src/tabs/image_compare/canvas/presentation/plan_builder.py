@@ -112,16 +112,6 @@ def _box_clipped_live_inputs(store, display_image1, display_image2, crop_boxes=N
         except Exception:
             raw2 = None
     try:
-        import logging as _dlog, time as _dtime
-        _now = _dtime.monotonic()
-        if _now - getattr(_box_clipped_live_inputs, "_dbg", 0.0) > 2.0:
-            _box_clipped_live_inputs._dbg = _now
-            _dlog.getLogger("ic.box.debug").warning(
-                "BOXDBG raw1=%r raw2=%r path1=%r" % (raw1, raw2, path1)
-            )
-    except Exception:
-        pass
-    try:
         live1 = get_image_dims(display_image1)
         box1 = scaled_box_for_source(raw1, path=path1, live_size=live1)
     except Exception:

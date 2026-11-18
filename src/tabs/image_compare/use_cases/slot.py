@@ -383,7 +383,32 @@ def load_images_from_paths(controller, file_paths: list[str], image_number: int)
             except Exception:
                 _svc = None
             _pool = getattr(controller, "thread_pool", None)
-            schedule_crop_warmup(_svc, [it.path for it in to_add], thread_pool=_pool)
+
+            def _on_crop_ready() -> None:
+                """The box landed asynchronously — refresh what derives from it.
+
+                The crop result is cached on the service and dispatches nothing
+                to the Store, so no chrome/document event follows it: without
+                this the InfoHUD kept the source size while the canvas painted
+                the crop (owner report 2026-11-18), and the canvas kept the
+                previous (uncropped) content rect until the next input.
+                ``viewport.geometry`` is a lightweight subdomain (chrome skips
+                it by design), so the refresh has to be asked for explicitly.
+                """
+                try:
+                    presenter = getattr(controller, "presenter", None)
+                    if presenter is not None:
+                        presenter.update_resolution_labels()
+                        presenter.schedule_canvas_update()
+                except Exception:
+                    pass
+
+            schedule_crop_warmup(
+                _svc,
+                [it.path for it in to_add],
+                thread_pool=_pool,
+                on_done=_on_crop_ready,
+            )
         except Exception:
             pass
         # UI + async lazy load (stat/cache_key now in ImageLoadService.ensure_async)
