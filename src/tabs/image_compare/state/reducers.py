@@ -361,6 +361,11 @@ class PipelineCacheReducer:
         if isinstance(crop_service, bool):
             auto_crop = crop_service
             crop_service = None
+        # Deliberately the DEFAULT preview tier, not the payload's bucket: this
+        # slice is a one-entry-per-path mirror (it replaces in place), and its
+        # readers (``pipeline._peek_from_state``, the presenter's preview
+        # tracking) hold only a path. The tiered set — one entry per bucket —
+        # lives in PipelineCache, which resolves a path to its best tier.
         try:
             key = _preview_key(path, crop_service, auto_crop)
         except Exception:

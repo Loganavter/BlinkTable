@@ -168,22 +168,47 @@ def should_use_progressive_load(
         pass
     return True
 
+
+def _preview_cap(target_long_edge: int | None) -> int:
+    """Long edge the preview tier is decoded at (1024 unless a target says otherwise).
+
+    The tier ladder is the tab layer's (``PREVIEW_BUCKETS`` in the image-compare
+    pipeline cache); ``None``/garbage/``<= 0`` keep the historic 1024 so every
+    existing caller decodes and keys exactly as before.
+    """
+    if target_long_edge is None:
+        return 1024
+    try:
+        edge = int(target_long_edge)
+    except (TypeError, ValueError):
+        return 1024
+    return edge if edge > 0 else 1024
+
+
 def load_preview_image(
-    image_path: str, crop_service=None, auto_crop: bool | None = None
+    image_path: str,
+    crop_service=None,
+    auto_crop: bool | None = None,
+    *,
+    target_long_edge: int | None = None,
 ) -> "QImage | None":
     """Load a bounded progressive preview for display-tier use only.
 
-    Returns ``QImage`` RGBA8888 capped at 1024 px on the long edge. Callers
-    store the result in ``document.preview_image*`` — never wrap with
-    ``TiledPixelStore`` (full-res tier owns memmap storage).
+    Returns ``QImage`` RGBA8888 capped at ``target_long_edge`` px on the long
+    edge (default 1024, the historic tier). Callers store the result in
+    ``document.preview_image*`` — never wrap with ``TiledPixelStore``
+    (full-res tier owns memmap storage).
 
     Streaming: ``pyvips.thumbnail`` when libvips can stream the format, else
-    PIL ``thumbnail`` (no QImageReader — deleted per plan_image_pipeline.md Phase 4).
-    Both paths share ``VipsImage.new_from_file(access="sequential")`` conceptually;
-    PIL fallback keeps the same 1024 cap and autocrop scaling.
+    PIL ``thumbnail`` (no QImageReader — deleted per plan_image_pipeline.md
+    Phase 4). Both paths decode AT the target size (shrink-on-load /
+    ``thumbnail``) instead of decoding full-frame and downscaling, and neither
+    upscales a source smaller than the target. ``target_long_edge=None`` keeps
+    the byte-identical 1024 behaviour every existing caller relies on.
 
     crop_service — DI CropService (предпочтительно), auto_crop — deprecated bool.
     """
+    cap = _preview_cap(target_long_edge)
     # Нормализация deprecated auto_crop → crop_service
     if crop_service is None and auto_crop is not None:
         if isinstance(auto_crop, bool) and auto_crop:
@@ -205,7 +230,7 @@ def load_preview_image(
 
     try:
         if pyvips_can_stream(image_path):
-            return _load_preview_vips(image_path, crop_service=crop_service)
+            return _load_preview_vips(image_path, crop_service=crop_service, target_long_edge=cap)
 
         if JXL_SUPPORTED and image_path.lower().endswith(".jxl"):
             logger.info(f"Loading JXL preview for: {image_path}")
@@ -221,7 +246,7 @@ def load_preview_image(
 
             original_width, original_height = img.size
             _ensure_supported_dimensions(original_width, original_height, image_path)
-            max_preview_size = 1024
+            max_preview_size = cap
             scale = min(
                 max_preview_size / original_width, max_preview_size / original_height
             )
@@ -250,12 +275,13 @@ def load_preview_image(
         with Image.open(image_path) as img:
             original_width, original_height = img.size
             _ensure_supported_dimensions(original_width, original_height, image_path)
-            max_preview_size = 1024
+            max_preview_size = cap
             scale = min(
                 max_preview_size / original_width, max_preview_size / original_height
             )
 
             if scale >= 1.0:
+                # Smaller than the tier: keep it as-is (never upscale a preview).
                 preview = img.copy().convert("RGBA")
                 new_width, new_height = preview.size
             else:
@@ -286,9 +312,14 @@ def load_preview_image(
 
 
 def _load_preview_vips(
-    image_path: str, crop_service=None, auto_crop: bool | None = None
+    image_path: str,
+    crop_service=None,
+    auto_crop: bool | None = None,
+    *,
+    target_long_edge: int | None = None,
 ) -> "QImage | None":
     """Streaming preview via ``pyvips.thumbnail`` (no full-frame decode)."""
+    cap = _preview_cap(target_long_edge)
     if crop_service is None and auto_crop is not None:
         if isinstance(auto_crop, bool) and auto_crop:
             try:
@@ -312,7 +343,7 @@ def _load_preview_vips(
         from engine.store.tiled_pixel_store import qimage_from_pixel_source
         from shared.image_processing.bounded_frame import vips_thumbnail_array
 
-        arr = vips_thumbnail_array(image_path, 1024)
+        arr = vips_thumbnail_array(image_path, cap)
         if arr.shape[2] != 4:
             rgb = arr[:, :, :3] if arr.shape[2] >= 3 else arr
             arr = np.empty((arr.shape[0], arr.shape[1], 4), dtype=np.uint8)
@@ -397,8 +428,10 @@ def get_image_format_info(image_path: str) -> tuple[str, bool, bool]:
 class ProgressiveImageLoader:
     """Thin wrapper delegating to PipelineCache (single source of truth).
 
-    Preview tier lives in PipelineCache with key (path,mtime,size,has_crop,box,1024);
-    full tier via PipelineCache pixel LRU. Legacy caches removed.
+    Preview tier lives in PipelineCache with key
+    (path,mtime,size,has_crop,box,bucket) — ``bucket`` being the long edge
+    (1024/2048, see ``pipeline/cache.PREVIEW_BUCKETS``); full tier via
+    PipelineCache pixel LRU. Legacy caches removed.
     New code should use PipelineCache directly.
     """
 
