@@ -47,7 +47,7 @@ Opções de comparação de imagens, sempre disponíveis:
 - **Movimento da lupa** — mantém suave o seguimento da lente pelo cursor durante o arrasto; a linha **Suavização de laser** abaixo suaviza as guias da lupa. Cada linha tem um método próprio.
 - **Destaque vermelho para lupas sobrepostas** — enquanto uma lupa é arrastada, a parte do anel de captura escondida atrás de outras lupas é destacada; **Colorir novas lupas automaticamente** dá a cada nova lente uma cor distinta.
 - **FPS de Gravação** — a taxa de captura para o [Editor de vídeo](help://workspace.image_compare.video).
-- **Cortar automaticamente bordas pretas ao carregar** — corta as bordas pretas quando uma imagem é carregada.
+- **Cortar automaticamente bordas pretas ao carregar** — corta as bordas pretas quando uma imagem é carregada; desligado por padrão, então uma instalação nova mostra o quadro inteiro.
 - **Calcular PSNR automaticamente** / **Calcular SSIM automaticamente** — mostram a métrica automaticamente; desligadas por padrão.
 
 ### Galeria — IA {#image-gallery-ai}

@@ -32,6 +32,7 @@ Os controles do divisor na barra de ferramentas, nas formas compacta e expandida
 ### Rótulos {#labels-and-metrics}
 
 - **Sobreposição de nomes** (`N`) — mostra ou oculta os rótulos de nome de arquivo no canvas; os rótulos podem ser gravados nas imagens salvas.
+- **Etiqueta de tamanho** — a etiqueta no canto, acima do nome do arquivo, mostra o tamanho da imagem; com um recorte ativo ela lê `512x512 → 312x512` (carregado → desenhado), então um par recortado nunca parece comprimido.
 - **Zoom** — os rótulos somem enquanto a vista está ampliada e voltam no zoom de `100%`.
 - **Configurações de texto do rótulo** — abre um painel para tamanho da fonte, peso, opacidade, cores, fundo e posicionamento.
 

@@ -47,7 +47,7 @@ Image-compare options, always available:
 - **Magnifier movement** — keeps the lens following the pointer smooth while you drag it; the **Laser smoothing** row below smooths the magnifier guides. Both rows carry a method of their own.
 - **Red highlight for overlapping magnifiers** — while you drag a magnifier, the part of its capture ring hidden behind other magnifiers is highlighted; **Auto-color new magnifiers** gives each new lens a distinct color.
 - **Recording FPS** — the capture rate for the [Video Editor](help://workspace.image_compare.video).
-- **Auto-crop black borders on load** — trims black borders when an image is loaded.
+- **Auto-crop black borders on load** — trims black borders when an image is loaded; off by default, so a fresh install shows the full frame.
 - **Auto-calculate PSNR** / **Auto-calculate SSIM** — show the metric automatically; off by default.
 
 ### Image Gallery — AI {#image-gallery-ai}
