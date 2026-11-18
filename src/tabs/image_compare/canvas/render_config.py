@@ -78,6 +78,65 @@ def get_content_rect_screen_px(widget) -> tuple[int, int, int, int] | None:
     return (left, top, width, height)
 
 
+def _report_geometry_ruler_mismatch(
+    widget,
+    *,
+    content_rect: tuple[float, float, float, float],
+    widget_w: float,
+    widget_h: float,
+) -> None:
+    """Cross-check the divider's ruler against the plan's canvas basis.
+
+    Debug-only (``IMGSLI_GEOMETRY_ASSERT``) and strictly read-only. The two
+    rulers — this rect and ``plan.canvas_w/canvas_h`` — are refreshed by
+    different owners, and when a crop box made them disagree the seam lagged
+    the painted cut by ~60 px at any split ≠ 0.5 (owner report 2026-11-18, see
+    ``presentation/geometry_assert.py``).
+
+    The authored (pre-camera) rect is the input, not the returned one:
+    ``map_content_rect_through_view`` legitimately pushes the rect outside the
+    widget under zoom/pan, while the authored rect is always a letterbox fit,
+    so "inside the widget" is a real invariant there.
+
+    ``envelope_hold`` plans are skipped: they mark a preview/source mix that is
+    not presentable yet, so a basis/rect disagreement is expected, not a bug.
+    So is a padded frame: ``compute_inner_content_rect`` narrows the rect back
+    to the image region while ``plan.canvas_*`` keeps the pads, so the aspect
+    check has nothing to compare there — the containment invariants still apply.
+    Every step is guarded — a watchdog must not be able to break the frame it
+    watches, and a missing/odd widget or plan is simply not a mismatch.
+    """
+    try:
+        from engine.cache.display_tier_service import plan_owns_padded_framebuffer
+        from tabs.image_compare.canvas.presentation.geometry_assert import (
+            enabled,
+            report,
+        )
+
+        if not enabled():
+            return
+        plan = getattr(widget, "_active_render_plan", None)
+        if getattr(plan, "envelope_hold", False):
+            return
+        basis_w = getattr(plan, "canvas_w", 0)
+        basis_h = getattr(plan, "canvas_h", 0)
+        if plan_owns_padded_framebuffer(plan):
+            basis_w = basis_h = 0
+        report(
+            canvas_w=basis_w,
+            canvas_h=basis_h,
+            widget_w=widget_w,
+            widget_h=widget_h,
+            content_rect=content_rect,
+            # No divider position here: the line is drawn from this very rect
+            # (``DividerPass`` → rect.x + rect.w * split), so a position derived
+            # at this call site cannot disagree with it. The parameter exists
+            # for callers that hold a separately positioned line.
+        )
+    except Exception:
+        return
+
+
 def get_view_transformed_content_rect_widget_px(
     widget,
 ) -> tuple[float, float, float, float] | None:
@@ -108,7 +167,7 @@ def get_view_transformed_content_rect_widget_px(
     widget_h = float(widget.height())
     if widget_w <= 0 or widget_h <= 0:
         return None
-    return map_content_rect_through_view(
+    rect = map_content_rect_through_view(
         (float(x), float(y), float(w), float(h)),
         widget_width=widget_w,
         widget_height=widget_h,
@@ -116,4 +175,11 @@ def get_view_transformed_content_rect_widget_px(
         pan_offset_x=get_pan_offset_x(widget),
         pan_offset_y=get_pan_offset_y(widget),
     )
+    _report_geometry_ruler_mismatch(
+        widget,
+        content_rect=(float(x), float(y), float(w), float(h)),
+        widget_w=widget_w,
+        widget_h=widget_h,
+    )
+    return rect
 
