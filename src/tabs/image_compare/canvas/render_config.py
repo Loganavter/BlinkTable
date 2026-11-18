@@ -96,24 +96,6 @@ def get_view_transformed_content_rect_widget_px(
     state = getattr(widget, "runtime_state", None)
     if state is None:
         return None
-    try:
-        import logging as _dlog
-        import time as _dtime
-
-        _now = _dtime.monotonic()
-        _last = getattr(state, "_dbg_last_rect_log", 0.0) or 0.0
-        if _now - _last > 1.0:
-            state._dbg_last_rect_log = _now
-            _dlog.getLogger("ic.rect.debug").warning(
-                f"RENTDBG outer={getattr(state, '_content_rect_px', None)} "
-                f"inner={getattr(state, '_inner_content_rect_px', None)} "
-                f"sr={getattr(state, '_content_sr', None)} "
-                f"letterbox={getattr(state, '_letterbox_params', None)} "
-                f"widget={widget.width()}x{widget.height()} "
-                f"zoom={getattr(state, '_zoom_viewport_state', None) and state._zoom_viewport_state.zoom_level}"
-            )
-    except Exception:
-        pass
     content_rect = (
         getattr(state, "_inner_content_rect_px", None) or state._content_rect_px
     )
