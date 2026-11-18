@@ -261,7 +261,7 @@ class SettingsApplicationService(QObject):
         dispatcher = self.store.get_dispatcher()
 
         if (
-            getattr(self.store.settings, "auto_crop_black_borders", True)
+            getattr(self.store.settings, "auto_crop_black_borders", False)
             != data.auto_crop_black_borders
         ):
             dispatcher.dispatch(SetAutoCropBlackBordersAction(data.auto_crop_black_borders))

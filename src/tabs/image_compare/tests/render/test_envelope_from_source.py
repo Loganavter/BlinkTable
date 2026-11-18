@@ -421,10 +421,15 @@ def test_crop_plan_keeps_the_display_truth(tmp_path):
 
     plan = build_canvas_plan(store, disp1, disp2, preserve_zoom=True)
 
-    assert plan.envelope_dims is None, (
-        "with a crop box active the box-clipped display dims are the truth;"
-        " the plan must not advertise a source-space envelope"
-    )
+    # The plan ADVERTISES the box-clipped envelope (2026-11-18). It is not a
+    # "source-space" guess here: the crop box is already applied, so these are
+    # the source dims clipped by it. Carrying them is what stops the rect owner
+    # from falling back to the installed display tier's UNCROPPED size (a lazy
+    # ``TiledPixelStore`` reports ``[512, 512]`` for a 312x512 crop). The
+    # letterbox owner still IGNORES this kwarg whenever boxes are active
+    # (``update_common_letterbox_geometry``: ``_plan_envelope`` is nulled under
+    # a box), so nothing is double-clipped.
+    assert plan.envelope_dims == (120, 80, 120, 80)
     assert (plan.canvas_w, plan.canvas_h) == (120, 80)
     assert tuple(store.runtime_cache.overlay_clip_rect) == (0, 0, 120, 80)
     # The drawn letterbox keeps fitting the display pair (HEAD-identical):

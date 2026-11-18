@@ -293,6 +293,16 @@ def build_canvas_plan(
             # Box dims are the truth; the clipped views may still be lazy
             # full-frame stores whose ``.size`` reports the uncropped frame.
             w1, h1, w2, h2 = _boxed_dims
+            # Carry the SAME box-clipped envelope to the downstream geometry
+            # owner. Without it ``refresh_live_content_rect`` falls back to
+            # ``get_image_dims(plan.image1/2)`` — the installed display store,
+            # which reports the UNCROPPED frame (measured live 2026-11-18: a
+            # 312x512 crop of a 512x512 source still read ``size=[512, 512]``).
+            # The canvas basis then fitted the source aspect while the image
+            # quad drew the crop aspect, so at any split ≠ 0.5 the divider
+            # (`_content_rect_px`) sat up to ~60 px off the painted cut — the
+            # owner's "the seam lags behind the line, two different rulers".
+            envelope_dims = (w1, h1, w2, h2)
         else:
             w2, h2 = _w(display_image2), _h(display_image2)
         _src1 = source_image1 if source_image1 is not None else display_image1

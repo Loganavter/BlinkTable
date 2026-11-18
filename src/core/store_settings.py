@@ -20,7 +20,7 @@ class SettingsState:
     ui_mode: str = "beginner"
     debug_mode_enabled: bool = False
     system_notifications_enabled: bool = True
-    auto_crop_black_borders: bool = True
+    auto_crop_black_borders: bool = False
     video_recording_fps: int = FpsPolicy.DEFAULT
     video_editor_preview_render_scale: float = 1.0
     rhi_backend: str = "default"

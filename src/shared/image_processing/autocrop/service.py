@@ -50,14 +50,18 @@ def invalidate_all_services() -> None:
 
 
 def schedule_crop_warmup(
-    crop_service: "CropService | None", paths: list[str], thread_pool=None
+    crop_service: "CropService | None", paths: list[str], thread_pool=None, on_done=None
 ) -> None:
-    """Удобный хелпер для фонового прогрева CropService (long-term fix)."""
+    """Удобный хелпер для фонового прогрева CropService (long-term fix).
+
+    ``on_done`` travels to ``warm_cache_async`` (GUI-thread callback after the
+    boxes are known) — see its docstring.
+    """
     if crop_service is None or not paths:
         return
     try:
         # delegate to service method (handles pooling)
-        crop_service.warm_cache_async(paths, thread_pool=thread_pool)
+        crop_service.warm_cache_async(paths, thread_pool=thread_pool, on_done=on_done)
     except Exception:
         pass
 
@@ -254,12 +258,20 @@ class CropService:
 
     # -- long-term fix: background warmup (отдельный crop cache прогрев) --
     def warm_cache_async(
-        self, paths: list[str | Path], thread_pool=None
+        self, paths: list[str | Path], thread_pool=None, on_done=None
     ) -> None:
         """Прогреть кэш CropService в фоне без блока GUI.
 
         Запускает GenericWorker в thread_pool (или global QThreadPool) который
         вызывает self.compute для каждого path. GUI не ждёт результата.
+
+        ``on_done`` — необязательный GUI-thread callback, вызываемый ПОСЛЕ
+        прогрева (через queued-сигнал, значит в потоке вызывающего). Нужен тем,
+        кто показывает производную от бокса величину: результат автокропа
+        приезжает асинхронно, а события в Store не порождает — без него
+        подпись (InfoHUD «512x512 → 312x512») оставалась бы в состоянии
+        «кропа нет» до следующего случайного обновления chrome (владелец,
+        2026-11-18).
         """
         if not paths:
             return
@@ -273,6 +285,13 @@ class CropService:
             except Exception:
                 continue
         if not to_warm:
+            # Everything was already cached: the caller's dependent readout is
+            # valid RIGHT NOW, so deliver the callback instead of going silent.
+            if on_done is not None:
+                try:
+                    on_done()
+                except Exception:
+                    pass
             return
 
         def _warm(paths_: list[str], svc: "CropService"):
@@ -281,6 +300,14 @@ class CropService:
                     svc.compute(pp)
                 except Exception:
                     pass
+
+        def _finished() -> None:
+            if on_done is None:
+                return
+            try:
+                on_done()
+            except Exception:
+                pass
 
         try:
             from sli_ui_toolkit.workers import GenericWorker
@@ -291,9 +318,18 @@ class CropService:
                     self.compute(pp)
                 except Exception:
                     pass
+            _finished()
             return
         try:
             worker = GenericWorker(_warm, to_warm, self)
+            # ``WorkerSignals`` is created on the calling (GUI) thread, so this
+            # connection delivers queued there — no notifier object to keep
+            # alive, and a destroyed receiver just drops the delivery.
+            if on_done is not None:
+                try:
+                    worker.signals.finished.connect(_finished)
+                except Exception:
+                    pass
             pool = thread_pool
             if pool is None:
                 try:
@@ -311,5 +347,6 @@ class CropService:
                         self.compute(pp)
                     except Exception:
                         pass
+                _finished()
         except Exception:
             pass

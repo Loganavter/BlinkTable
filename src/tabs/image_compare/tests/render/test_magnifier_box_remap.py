@@ -50,6 +50,10 @@ def _bordered_png(path):
 
 def _store_with_images(path, *, size=(200, 160)):
     store = Store()
+    # Auto-crop is OFF by default since 2026-11-18, so this suite (which is
+    # about a crop box being ACTIVE) opts in explicitly. The opt-out case below
+    # flips it back to prove the resolver honours the flag.
+    store.settings.auto_crop_black_borders = True
     store.create_workspace_session(session_type="image_compare", activate=True)
     doc = DocumentModel(
         image_list1=[ImageItem(path=path, display_name="a")],

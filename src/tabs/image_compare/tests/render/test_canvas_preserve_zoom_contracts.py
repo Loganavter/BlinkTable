@@ -281,7 +281,7 @@ def test_resize_gl_preserves_image_focus_when_letterbox_changes(monkeypatch):
     monkeypatch.setattr(
         render_context,
         "update_common_letterbox_geometry",
-        lambda widget, img1, img2: widget.runtime_state._letterbox_params.__setitem__(
+        lambda widget, img1, img2, **kwargs: widget.runtime_state._letterbox_params.__setitem__(
             0,
             (0.08, 0.02, 0.84, 0.96),
         ),

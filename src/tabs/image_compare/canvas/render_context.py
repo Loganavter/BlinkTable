@@ -482,8 +482,17 @@ def resize_canvas(widget, w: int, h: int):
 
         letterbox_focus = capture_letterbox_focus(widget)
     img1, img2 = state._stored_pil_images
+    # The active plan's SOURCE-space envelope (crop-aware: the plan carries the
+    # box-clipped dims under a crop) — fitting the stored previews instead made
+    # a resize re-derive the UNCROPPED aspect, and the divider then drew against
+    # a different ruler than the image (owner report 2026-11-18).
+    _resize_envelope = getattr(
+        getattr(widget, "_active_render_plan", None), "envelope_dims", None
+    )
     if state._shader_letterbox_mode and img1 is not None:
-        update_common_letterbox_geometry(widget, img1, img2)
+        update_common_letterbox_geometry(
+            widget, img1, img2, envelope_dims=_resize_envelope
+        )
         from ui.canvas_infra.viewport.focus import restore_letterbox_focus
 
         restore_letterbox_focus(widget, letterbox_focus)
@@ -498,7 +507,9 @@ def resize_canvas(widget, w: int, h: int):
         widget.update()
         return
     if state._shader_letterbox_mode and img2 is not None:
-        update_common_letterbox_geometry(widget, img1, img2)
+        update_common_letterbox_geometry(
+            widget, img1, img2, envelope_dims=_resize_envelope
+        )
     elif img2 is not None:
         state._letterbox_params[1] = (0.0, 0.0, 1.0, 1.0)
     sync_runtime_overlays_after_resize(widget)
