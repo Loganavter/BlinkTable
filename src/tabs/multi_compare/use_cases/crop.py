@@ -41,7 +41,7 @@ def effective_crop_box(controller, slot) -> tuple[int, int, int, int] | None:
                     should = getattr(
                         getattr(store, "settings", None),
                         "auto_crop_black_borders",
-                        True,
+                        False,
                     )
                     if not should:
                         service = None

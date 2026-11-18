@@ -45,7 +45,7 @@ def init_session_state(controller, store, thread_pool):
     # Дефолт сессии должен отражать настройку сразу: иначе fallback
     # `else self.crop_service` в PipelineCache воскресит кроп при OFF.
     try:
-        _should = getattr(getattr(store, "settings", None), "auto_crop_black_borders", True)
+        _should = getattr(getattr(store, "settings", None), "auto_crop_black_borders", False)
         _default_session.sync_crop_service(bool(_should))
     except Exception:
         pass

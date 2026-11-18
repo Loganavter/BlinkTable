@@ -269,7 +269,7 @@ class ImageCompareContextMenuProvider:
             getattr(
                 getattr(self.store, "settings", None),
                 "auto_crop_black_borders",
-                True,
+                False,
             )
         )
 

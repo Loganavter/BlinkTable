@@ -84,6 +84,14 @@ class _Store:
         self._active_id = next(iter(self._sessions), "s1")
         self.emitted: list = []
         self._dispatcher = _RecordingDispatcher(self) if with_dispatcher else None
+        # The real object ALWAYS carries this field (``SettingsState``), so the
+        # fake models it instead of leaning on the context menu's defensive
+        # ``getattr(..., True)`` fallback. These tests describe a user who has
+        # auto-crop ON — the profile where "Auto" reads as checked and a toggle
+        # goes to Off — so the setting is stated here rather than inherited
+        # from a fallback literal (changing that literal used to flip this
+        # suite's premise silently).
+        self.settings = SimpleNamespace(auto_crop_black_borders=True)
 
     def get_workspace_session(self, session_id):
         return self._sessions.get(session_id)
