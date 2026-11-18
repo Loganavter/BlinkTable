@@ -27,9 +27,10 @@ def is_preview_tier(source) -> bool:
     """True when ``source`` is a preview-tier QImage (never unify input).
 
     Single source of truth for the preview-tier predicate: the tile-native
-    path must never upscale a 1024px preview into a full-size store, and
-    tab-side callers gate on this before spawning a worker so mixed-tier
-    pairs serve ready sides without an empty task.
+    path must never upscale a preview (a 1024/2048 long-edge QImage, the
+    tab layer's preview buckets) into a full-size store, and tab-side callers
+    gate on this before spawning a worker so mixed-tier pairs serve ready
+    sides without an empty task.
     """
     try:
         from PySide6.QtGui import QImage
@@ -61,9 +62,9 @@ def unify_pair(
 
     if is_preview_tier(source1) or is_preview_tier(source2):
         # Preview tier must never enter unify: the tile-native path would
-        # silently upscale a 1024px preview into a full-size store (burning
-        # a full resample) and the result would poison the unify memo as a
-        # full-res pair. The full-res arrival re-triggers unify via
+        # silently upscale a preview (1024/2048 long edge) into a full-size
+        # store (burning a full resample) and the result would poison the unify
+        # memo as a full-res pair. The full-res arrival re-triggers unify via
         # handle_full_image_loaded -> ensure_unification; until then the
         # preview-backing display path holds the preview.
         logger.debug(
