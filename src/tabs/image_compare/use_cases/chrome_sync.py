@@ -226,7 +226,9 @@ def get_image_dimensions(store, image_number: int) -> tuple[int, int] | None:
     return None
 
 
-def get_effective_dimensions(store, image_number: int) -> tuple[int, int] | None:
+def get_effective_dimensions(
+    store, image_number: int, widget=None
+) -> tuple[int, int] | None:
     """The dims the canvas actually draws: source size clipped by the crop box.
 
     The HUD printed the SOURCE size while the canvas painted the crop (owner
@@ -235,6 +237,11 @@ def get_effective_dimensions(store, image_number: int) -> tuple[int, int] | None
     the letterbox owner use — so the chip and the pixels cannot disagree.
     ``None`` means "no crop or nothing known": the caller keeps the source text
     and adds nothing.
+
+    The crop service comes from ``crop_service_for_widget`` (the session
+    controller backlink) — the production Store pipeline slot holds the
+    reducer mirror and never the service, so reading that slot alone (the
+    first cut of this helper) always answered "no crop".
     """
     document = _document(store)
     if document is None:
@@ -246,16 +253,18 @@ def get_effective_dimensions(store, image_number: int) -> tuple[int, int] | None
     try:
         from tabs.image_compare.canvas.texture_parts.crop_clip import (
             box_dims,
+            crop_service_for_widget,
             resolve_box_for_path,
         )
         from tabs.image_compare.state.document import crop_override_for_path
 
-        service = None
-        try:
-            pipeline = store.get_session_state_slot("pipeline")
-            service = getattr(pipeline, "crop_service", None)
-        except Exception:
-            service = None
+        service = crop_service_for_widget(widget) if widget is not None else None
+        if service is None:
+            try:
+                pipeline = store.get_session_state_slot("pipeline")
+                service = getattr(pipeline, "crop_service", None)
+            except Exception:
+                service = None
         try:
             override = crop_override_for_path(document, path)
         except Exception:
@@ -636,12 +645,19 @@ class ImageCompareChromeSync(QObject):
         if has_both_images:
             if dim := get_image_dimensions(self.store, 1):
                 res1_text = format_resolution_text(
-                    dim, get_effective_dimensions(self.store, 1)
+                    dim, get_effective_dimensions(self.store, 1, self.widget)
                 )
             if dim := get_image_dimensions(self.store, 2):
                 res2_text = format_resolution_text(
-                    dim, get_effective_dimensions(self.store, 2)
+                    dim, get_effective_dimensions(self.store, 2, self.widget)
                 )
+        try:
+            import logging as _dlog
+            _dlog.getLogger("ic.hud.debug").warning(
+                "HUDDBG res1=%r res2=%r" % (res1_text, res2_text)
+            )
+        except Exception:
+            pass
         try:
             self.widget.update_resolution_labels(
                 res1_text,
