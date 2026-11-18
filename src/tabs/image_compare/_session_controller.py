@@ -73,7 +73,7 @@ class SessionController(SessionApiMixin, QObject):
                 _should = getattr(
                     getattr(self.store, "settings", None),
                     "auto_crop_black_borders",
-                    True,
+                    False,
                 )
                 sess.sync_crop_service(bool(_should))
             except Exception:
@@ -136,7 +136,7 @@ class SessionController(SessionApiMixin, QObject):
                 getattr(
                     getattr(self.store, "settings", None),
                     "auto_crop_black_borders",
-                    True,
+                    False,
                 )
             )
             if _cur_crop != self._last_crop_enabled:

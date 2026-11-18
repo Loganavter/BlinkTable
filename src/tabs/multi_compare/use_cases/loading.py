@@ -153,7 +153,7 @@ def _get_crop_service(controller):
             # check setting manually if controller has no getter
             store = getattr(controller, "store", None)
             if store is not None:
-                should = getattr(getattr(store, "settings", None), "auto_crop_black_borders", True)
+                should = getattr(getattr(store, "settings", None), "auto_crop_black_borders", False)
                 if not should:
                     return None
             return svc

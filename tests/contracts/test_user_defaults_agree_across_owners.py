@@ -93,35 +93,7 @@ FRESH_INSTALL_TEST_REL = "tests/plugins/test_user_defaults_fresh_install.py"
 #: The count is the ratchet: a new disagreeing site (even in a listed file) has
 #: no entry left to consume and fails; a repaired site leaves a surplus count
 #: and fails as stale, forcing the entry to be dropped.
-_KNOWN_FALLBACK_DRIFT: dict[tuple[str, str, bool], int] = {
-    (
-        "src/tabs/image_compare/_session_controller.py",
-        "auto_crop_black_borders",
-        True,
-    ): 2,
-    (
-        "src/tabs/image_compare/canvas/features/magnifier/geometry/box_remap.py",
-        "auto_crop_black_borders",
-        True,
-    ): 1,
-    (
-        "src/tabs/image_compare/ui/context_menu.py",
-        "auto_crop_black_borders",
-        True,
-    ): 1,
-    (
-        "src/tabs/image_compare/use_cases/session_init.py",
-        "auto_crop_black_borders",
-        True,
-    ): 1,
-    ("src/tabs/multi_compare/use_cases/crop.py", "auto_crop_black_borders", True): 1,
-    (
-        "src/tabs/multi_compare/use_cases/loading.py",
-        "auto_crop_black_borders",
-        True,
-    ): 1,
-    ("src/ui/managers/dialog_manager.py", "auto_crop_black_borders", True): 1,
-}
+_KNOWN_FALLBACK_DRIFT: dict[tuple[str, str, bool], int] = {}
 
 
 # ---------------------------------------------------------------------------

@@ -140,7 +140,7 @@ class DialogManager:
             auto_calculate_psnr=auto_calculate_psnr,
             auto_calculate_ssim=auto_calculate_ssim,
             auto_crop_black_borders=getattr(
-                self.host.store.settings, "auto_crop_black_borders", True
+                self.host.store.settings, "auto_crop_black_borders", False
             ),
             current_video_fps=clamp_fps(
                 getattr(
