@@ -328,8 +328,31 @@ class ImageLoadService:
 
         from tabs._shared.loading_pipeline import ensure_async as _seam_ensure_async
 
+        # Preview tier follows the live canvas (PREVIEW_BUCKETS); the seam
+        # decodes AT that size and files it under the same bucket. Computed here
+        # (GUI thread, the caller of the seam) so the preview worker itself only
+        # ever sees an int. 1024 when there is no canvas.
         try:
-            sig = _seam_ensure_async(cache, path, int(slot), _on_ready, _on_error)
+            from tabs.image_compare.use_cases.image_decode import (
+                canvas_preview_bucket as _canvas_preview_bucket,
+            )
+
+            target_edge = _canvas_preview_bucket(controller)
+        except Exception:
+            target_edge = None
+        ic_preview_debug(
+            "ImageLoadService preview tier slot=%s path=%s edge=%s", slot, path, target_edge
+        )
+
+        try:
+            sig = _seam_ensure_async(
+                cache,
+                path,
+                int(slot),
+                _on_ready,
+                _on_error,
+                target_long_edge=target_edge,
+            )
         except Exception as e:
             ic_preview_debug("ImageLoadService seam ensure_async failed %s", e)
             return None

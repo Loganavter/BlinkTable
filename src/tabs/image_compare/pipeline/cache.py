@@ -10,8 +10,14 @@ the former crop-disabled shape). The path slot is
 spellings of one file — including the case-folded spellings a Windows or
 case-insensitive mount considers equal — are one entry:
   pixel: (path, mtime_ns, size, False) -> TiledPixelStore
-  preview: (path, mtime_ns, size, False, 1024) -> QImage
+  preview: (path, mtime_ns, size, False, bucket) -> QImage
   unify: (uid1, uid2, method, target_w, target_h) -> (TiledPixelStore, TiledPixelStore)
+
+The preview bucket is the tier's long edge (``PREVIEW_BUCKETS``, chosen from
+the canvas by :func:`preview_bucket_for`); it sits in the slot the fixed 1024
+used to occupy, so one file may hold one entry per bucket. Path-only readers
+(``get_preview`` without a bucket) resolve the best available tier rather than
+guessing the bucket.
 
 Decode tiers are FULL-FRAME: the session CropService is detection-only and
 never feeds keys or decode (``crop_service``/``auto_crop`` args are
@@ -124,13 +130,83 @@ _pixel_registry = None  # type: ignore
 _PIXEL_CACHE_MAX = 8
 _UNIFY_CACHE_MAX = 8
 _PREVIEW_CACHE_MAX = 8
-_PREVIEW_SIZE = 1024
+
+#: Long-edge buckets of the preview tier, smallest first.
+#:
+#: Why tiers exist at all: the preview is what the canvas paints for the one
+#: frame before the full-resolution store lands, so it must be decodable fast
+#: AND sharp at the canvas size. Industry baseline: Lightroom keeps
+#: thumbnail / standard (screen) / 1:1 previews; darktable keeps a mipmap
+#: cache in steps and had to add 6K/8K previews because a fixed small tier was
+#: not enough (darktable issue #20178,
+#: https://github.com/darktable-org/darktable/issues/20178); the freedesktop
+#: thumbnail spec uses fixed buckets (128/256/512/1024,
+#: https://specifications.freedesktop.org/thumbnail-spec/latest/) invalidated
+#: by mtime+size, which is the shape of the key here.
+PREVIEW_BUCKETS: tuple[int, ...] = (1024, 2048, 4096)
+_PREVIEW_SIZE = PREVIEW_BUCKETS[0]
 
 # Byte budgets (count limits above still apply; eviction triggers on either).
-# ~8 × 24MP RGBA (96MB) fits in the pixel/unify budgets; previews are ~4MB each.
+# ~8 × 24MP RGBA (96MB) fits in the pixel/unify budgets; a preview is ~4MB at
+# the 1024 tier and up to ~64MB at 4096, so the preview budget evicts the
+# biggest non-pinned tiers first (count 8 is the real ceiling for 4096 tiers).
 _PIXEL_CACHE_MAX_BYTES = 1536 * 1024 * 1024
 _UNIFY_CACHE_MAX_BYTES = 1536 * 1024 * 1024
 _PREVIEW_CACHE_MAX_BYTES = 128 * 1024 * 1024
+
+
+def preview_bucket_for(long_edge_px: int | None) -> int:
+    """Smallest preview bucket covering ``long_edge_px`` (``PREVIEW_BUCKETS``).
+
+    The preview tier is CACHED, TIERED and SIZED TO THE CANVAS rather than a
+    fixed 1024: it is painted for the frame(s) before the full-resolution
+    store lands, and a 1024 tier upscaled to a bigger canvas is a soft frame.
+    Lightroom's thumbnail / standard (screen) / 1:1 ladder, darktable's
+    stepped mipmap cache (which had to grow 6K/8K tiers because fixed small
+    previews were not enough — darktable issue #20178,
+    https://github.com/darktable-org/darktable/issues/20178) and the
+    freedesktop thumbnail spec's fixed buckets (128/256/512/1024,
+    https://specifications.freedesktop.org/thumbnail-spec/latest/, mtime+size
+    invalidation) all land on the same shape.
+
+    Buckets, not the exact canvas size, on purpose: a window resize must not
+    spawn a new cache entry per pixel of drag — the tier comes off a fixed
+    ladder, so resizing inside a step reuses one decode (and one key).
+
+    ``None``/garbage/``<= 0`` -> 1024 (the historic tier, so every unscaled
+    caller keeps today's key); never above the largest bucket. Returns a value
+    from ``PREVIEW_BUCKETS`` only, so it can go straight into ``_preview_key``
+    and ``load_preview_image(target_long_edge=...)``.
+    """
+    try:
+        edge = int(long_edge_px)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return _PREVIEW_SIZE
+    if edge <= 0:
+        return _PREVIEW_SIZE
+    for bucket in PREVIEW_BUCKETS:
+        if edge <= bucket:
+            return bucket
+    return PREVIEW_BUCKETS[-1]
+
+
+def _preview_bucket_of_image(qimage) -> int:
+    """Bucket the stored QImage itself belongs to (1024 when unreadable).
+
+    A put that carries no explicit bucket labels the payload by its own long
+    edge, so a 2048 tier is never filed under the 1024 key (or the other way
+    round) — the key stays true to what is inside it. PIL images (tests) are
+    accepted through ``.size``.
+    """
+    try:
+        long_edge = max(int(qimage.width()), int(qimage.height()))
+    except Exception:
+        try:
+            size = qimage.size
+            long_edge = max(int(size[0]), int(size[1]))
+        except Exception:
+            return _PREVIEW_SIZE
+    return preview_bucket_for(long_edge)
 
 
 def _store_bytes(store) -> int:
@@ -193,12 +269,21 @@ def _unify_key(uid1: int | None, uid2: int | None, method: str, w: int, h: int) 
     return (uid1, uid2, method, int(w), int(h))
 
 
-_PREVIEW_CACHE_MAX = 8
-_PREVIEW_SIZE = 1024
+def _preview_key(
+    path: str,
+    crop_service=None,
+    auto_crop: bool | None = None,
+    *,
+    bucket: int = _PREVIEW_SIZE,
+    **_kw,
+) -> tuple:
+    """Preview tier key: ``(path, mtime_ns, size, False, bucket)`` — всегда boxless.
 
-
-def _preview_key(path: str, crop_service=None, auto_crop: bool | None = None, **_kw) -> tuple:
-    """Preview tier key: (path, mtime_ns, size, False, 1024) — всегда boxless.
+    ``bucket`` is the tier's long edge (``PREVIEW_BUCKETS``) and sits in the
+    slot the fixed 1024 used to occupy. No bucket passed -> 1024, byte-identical
+    to the historic key, so every unmigrated caller reads and writes exactly
+    what it did before. Two buckets of one file are different entries: a canvas
+    that grew must not be served the smaller tier it was shown last time.
 
     См. _pixel_key: декод full-frame, сервис — только детекция.
     W1 adapter: file-identity prefix delegated to the shared seam.
@@ -206,7 +291,15 @@ def _preview_key(path: str, crop_service=None, auto_crop: bool | None = None, **
     from tabs._shared.loading_pipeline import cache_key_for_path as _seam_key_for_path
 
     norm, mtime, size = _seam_key_for_path(path)
-    return (norm, mtime, size, False, _PREVIEW_SIZE)
+    return (norm, mtime, size, False, preview_bucket_for(bucket))
+
+
+def _key_bucket(key: tuple) -> int:
+    """Bucket slot of a preview key (1024 for anything unreadable — never raises)."""
+    try:
+        return int(key[4])
+    except Exception:
+        return _PREVIEW_SIZE
 
 
 class PipelineCache:
@@ -517,9 +610,54 @@ class PipelineCache:
             self.put_pixel(path, eff_service, store, has_crop_arg)
         return store
 
-    # -- preview tier (QImage, 1024 cap) --
+    # -- preview tier (QImage, bucketed long edge — see PREVIEW_BUCKETS) --
 
-    def get_preview(self, path: str, crop_service=None, auto_crop: bool | None = None, **_kw):
+    def _preview_keys_for_path(self, path: str) -> list[tuple]:
+        """Cached preview keys whose content identity matches *path* now.
+
+        ``mtime``+``size`` are part of the match (not just the path): an
+        overwritten file must never be served its previous decode. Used by the
+        path-only lookup rule — the tier's bucket is not known to callers that
+        only hold a path.
+        """
+        try:
+            from tabs._shared.loading_pipeline import cache_key_for_path as _seam_key_for_path
+
+            norm, mtime, size = _seam_key_for_path(path)
+        except Exception:
+            return []
+        keys: list[tuple] = []
+        for key in list(self._preview.keys()):
+            try:
+                if (
+                    len(key) >= 5
+                    and key[0] == norm
+                    and key[1] == mtime
+                    and key[2] == size
+                    and isinstance(key[4], int)
+                ):
+                    keys.append(key)
+            except Exception:
+                continue
+        return keys
+
+    def get_preview(
+        self,
+        path: str,
+        crop_service=None,
+        auto_crop: bool | None = None,
+        *,
+        bucket: int | None = None,
+        **_kw,
+    ):
+        """Cached preview for ``path`` — exact ``bucket`` tier, else best available.
+
+        ``bucket`` given: the exact tier first, then a LARGER tier (a bigger
+        decode is still sharp at a smaller canvas — never a smaller one, that is
+        the soft frame the tiers exist to avoid). ``bucket=None`` (every legacy
+        caller): the largest cached tier for the file. Both keep today's key
+        shape, so an unscaled cache reads byte-identically.
+        """
         if isinstance(crop_service, bool) and auto_crop is None:
             auto_crop = crop_service
             crop_service = None
@@ -531,9 +669,19 @@ class PipelineCache:
         else:
             has_crop_arg = None
             eff = eff
-        key = _preview_key(path, eff, has_crop_arg)
-        qimg = self._preview.get(key)
-        if qimg is not None:
+        candidates = self._preview_keys_for_path(path)
+        if bucket is not None:
+            wanted = preview_bucket_for(bucket)
+            keys = [k for k in candidates if _key_bucket(k) == wanted]
+            keys += sorted(
+                (k for k in candidates if _key_bucket(k) > wanted), key=_key_bucket
+            )
+        else:
+            keys = sorted(candidates, key=_key_bucket, reverse=True)
+        for key in keys:
+            qimg = self._preview.get(key)
+            if qimg is None:
+                continue
             try:
                 self._preview.move_to_end(key)
             except Exception:
@@ -542,13 +690,29 @@ class PipelineCache:
             try:
                 if hasattr(qimg, "isNull") and qimg.isNull():
                     self._preview.pop(key, None)
-                    return None
+                    continue
             except Exception:
                 pass
             return qimg
         return None
 
-    def put_preview(self, path: str, crop_service=None, qimage=None, auto_crop: bool | None = None, **_kw) -> None:
+    def put_preview(
+        self,
+        path: str,
+        crop_service=None,
+        qimage=None,
+        auto_crop: bool | None = None,
+        *,
+        bucket: int | None = None,
+        **_kw,
+    ) -> None:
+        """Store the preview tier; ``bucket`` defaults to the image's own size.
+
+        No explicit bucket -> the QImage's long edge picks the tier, so a
+        payload is filed under the bucket it actually is (a 2048 decode never
+        read back as the 1024 tier) while every legacy caller — all of whose
+        previews are <= 1024 — keeps today's key exactly.
+        """
         if isinstance(crop_service, bool) and auto_crop is None:
             auto_crop = crop_service
             crop_service = None
@@ -562,7 +726,8 @@ class PipelineCache:
         if isinstance(crop_service, bool):
             auto_crop = crop_service
             crop_service = None
-        key = _preview_key(path, crop_service, auto_crop)
+        eff_bucket = _preview_bucket_of_image(qimage) if bucket is None else preview_bucket_for(bucket)
+        key = _preview_key(path, crop_service, auto_crop, bucket=eff_bucket)
         self._preview[key] = qimage
         try:
             self._preview.move_to_end(key)
@@ -570,8 +735,22 @@ class PipelineCache:
             pass
         self._ensure_preview_budget()
 
-    def get_or_load_preview(self, path: str, crop_service=None, auto_crop: bool | None = None):
+    def get_or_load_preview(
+        self,
+        path: str,
+        crop_service=None,
+        auto_crop: bool | None = None,
+        *,
+        bucket: int | None = None,
+        **_kw,
+    ):
         """Return cached QImage or load via load_preview_image — always full-frame.
+
+        ``bucket`` is the canvas-sized preview tier: the decode happens AT that
+        long edge (``load_preview_image(target_long_edge=...)``, shrink-on-load),
+        never full-frame-then-downscale, and the result is filed under the same
+        bucket so the next demand fill hits instead of re-decoding. ``None``
+        keeps the historic 1024 tier.
 
         W1+W2: без запекания кропа (``crop_service=None``); явные
         ``crop_service``/``auto_crop`` приняты для совместимости и
@@ -583,18 +762,23 @@ class PipelineCache:
         # W1+W2: no-bake — дефолта из self.crop_service больше нет.
         eff_service = None
         has_crop_arg = None
-        cached = self.get_preview(path, eff_service, has_crop_arg)
+        cached = self.get_preview(path, eff_service, has_crop_arg, bucket=bucket)
         if cached is not None:
             return cached
         try:
             from shared.image_processing.progressive_loader import load_preview_image as _load_preview
 
             # W1+W2: всегда full-frame, без запекания кропа.
-            qimg = _load_preview(path, crop_service=None)
+            if bucket is None:
+                qimg = _load_preview(path, crop_service=None)
+            else:
+                qimg = _load_preview(
+                    path, crop_service=None, target_long_edge=preview_bucket_for(bucket)
+                )
         except Exception:
             raise
         if qimg is not None:
-            self.put_preview(path, eff_service, qimg, has_crop_arg)
+            self.put_preview(path, eff_service, qimg, has_crop_arg, bucket=bucket)
         return qimg
 
     def evict(self, path: str) -> None:

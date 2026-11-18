@@ -138,6 +138,61 @@ def _resolve_ic_slot_for_path(controller, path: str) -> int | None:
     return None
 
 
+def canvas_preview_bucket(controller) -> int:
+    """Preview tier long edge for this canvas, in DEVICE px.
+
+    ONE place decides "how big is the preview tier" (the sibling of the single
+    owner of canvas size, ``get_current_label_dimensions``): the canvas' own
+    size times the widget's device-pixel ratio, so a 1.5x/HiDPI screen gets the
+    tier it actually paints; then the runtime content rect the render plan
+    recorded (logical px); then the plain widget/logical size; and finally the
+    historic 1024. Returns a value from ``PREVIEW_BUCKETS`` — a resize inside a
+    bucket step reuses one cache entry (see ``preview_bucket_for``).
+
+    Best-effort by contract: no presenter/widget/plan (headless, a worker that
+    lost the tab, a closed session) is 1024, never an exception.
+    """
+    from tabs.image_compare.pipeline.cache import preview_bucket_for
+
+    edge = 0
+    dpr = 1.0
+    presenter = None
+    try:
+        presenter = getattr(controller, "presenter", None)
+        if presenter is not None:
+            try:
+                canvas = presenter.get_canvas()
+            except Exception:
+                canvas = None
+            if canvas is None:
+                canvas = getattr(presenter, "widget", None)
+            if canvas is not None:
+                try:
+                    dpr = max(1.0, float(canvas.devicePixelRatioF() or 1.0))
+                except Exception:
+                    dpr = 1.0
+    except Exception:
+        presenter = None
+    try:
+        getter = getattr(presenter, "get_current_label_dimensions", None)
+        if callable(getter):
+            width, height = getter()
+            edge = int(max(int(width or 0), int(height or 0)) * dpr)
+    except Exception:
+        edge = 0
+    if edge <= 0:
+        # Fallback: the runtime content rect (logical px) the last render plan
+        # recorded — still closer to the canvas than a blind 1024.
+        try:
+            rect = getattr(
+                controller.store.viewport.geometry_state, "image_display_rect_on_label", None
+            )
+            edge = max(int(getattr(rect, "width", 0) or 0), int(getattr(rect, "height", 0) or 0))
+        except Exception:
+            edge = 0
+    return preview_bucket_for(edge)
+
+
 def load_image_async(controller, path, image_number, index_in_list, target_size=None):
     from shared.image_processing.progressive_loader import (
         should_use_progressive_load,
@@ -178,8 +233,14 @@ def load_image_async(controller, path, image_number, index_in_list, target_size=
             _emb = None
         if use_progressive:
             ic_preview_debug("load_image_async slot=%s -> try preview", image_number)
-            preview = _seam_get_or_load_preview(_emb, path, crop_service=None)
-            ic_preview_debug("load_image_async slot=%s preview=%s", image_number, preview)
+            # Preview tier follows the canvas (PREVIEW_BUCKETS): decode AT that
+            # size and file the entry under the same bucket. 1024 when there is
+            # no live canvas (see canvas_preview_bucket).
+            bucket = canvas_preview_bucket(controller)
+            preview = _seam_get_or_load_preview(_emb, path, target_long_edge=bucket)
+            ic_preview_debug(
+                "load_image_async slot=%s preview tier=%s preview=%s", image_number, bucket, preview
+            )
             if preview:
                 ic_preview_debug("load_image_async slot=%s -> preview hit", image_number)
                 return preview, path, image_number, index_in_list, True

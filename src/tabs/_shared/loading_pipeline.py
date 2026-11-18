@@ -133,23 +133,67 @@ def _is_usable_pixel(store: Any) -> bool:
     return store is not None
 
 
-def get_or_load_preview(cache: Any, path: Path | str) -> QImage | None:
-    """Sync preview demand fill: cached tier, else bounded (~1024px) decode.
+def _preview_decode(path: Path | str, target_long_edge: int | None):
+    """``load_preview_image`` at the requested tier (1024 when ``None``)."""
+    from shared.image_processing.progressive_loader import load_preview_image
+
+    if target_long_edge is None:
+        return load_preview_image(str(path))
+    return load_preview_image(str(path), target_long_edge=target_long_edge)
+
+
+def _preview_bucket(target_long_edge: int | None) -> int | None:
+    """Ladder bucket for a requested long edge (``None`` stays the default tier)."""
+    if target_long_edge is None:
+        return None
+    try:
+        from tabs.image_compare.pipeline.cache import preview_bucket_for
+
+        return preview_bucket_for(target_long_edge)
+    except Exception:
+        return None
+
+
+def _peek_cached_preview(cache: Any, path: Path | str, bucket: int | None):
+    """Cached preview at ``bucket`` (or the best tier when ``None``); never raises.
+
+    Duck-types the cache: an object whose ``get_preview`` predates the bucket
+    keyword keeps working through the positional fallback.
+    """
+    if cache is None:
+        return None
+    try:
+        if bucket is None:
+            return cache.get_preview(str(path))
+        return cache.get_preview(str(path), bucket=bucket)
+    except TypeError:
+        try:
+            return cache.get_preview(str(path))
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+
+def get_or_load_preview(
+    cache: Any, path: Path | str, *, target_long_edge: int | None = None
+) -> QImage | None:
+    """Sync preview demand fill: cached tier, else bounded decode.
 
     Delegates decode to ``load_preview_image`` (never re-implemented here).
+    ``target_long_edge`` selects the preview tier (``pipeline.cache.
+    PREVIEW_BUCKETS``, normally read off the live canvas); the decode happens
+    AT that size and the entry is filed under the same bucket. ``None`` keeps
+    the historic 1024 tier and every existing caller unchanged.
     Fail-open: any decode/cache failure returns ``None`` (never raises).
     """
+    bucket = _preview_bucket(target_long_edge)
     if cache is not None:
-        try:
-            hit = cache.get_preview(str(path))
-        except Exception:
-            hit = None
+        hit = _peek_cached_preview(cache, path, bucket)
         if _is_usable_preview(hit):
             return hit
     try:
-        from shared.image_processing.progressive_loader import load_preview_image
-
-        preview = load_preview_image(str(path))
+        preview = _preview_decode(path, bucket)
     except Exception:
         logger.debug("shared loading seam: preview decode failed for %s", path)
         return None
@@ -157,7 +201,13 @@ def get_or_load_preview(cache: Any, path: Path | str) -> QImage | None:
         return None
     if cache is not None:
         try:
-            cache.put_preview(str(path), preview)
+            if bucket is None:
+                cache.put_preview(str(path), preview)
+            else:
+                try:
+                    cache.put_preview(str(path), preview, bucket=bucket)
+                except TypeError:
+                    cache.put_preview(str(path), preview)
         except Exception:
             pass
     return preview
@@ -439,6 +489,8 @@ def ensure_async(
     slot_id: int,
     on_ready: Callable | None = None,
     on_error: Callable | None = None,
+    *,
+    target_long_edge: int | None = None,
 ) -> AbortSignal | None:
     """Preview-first async load with single-flight on the boxless key.
 
@@ -449,15 +501,25 @@ def ensure_async(
     waiter continues into the bounded full-res FIFO second stage. Dispatch
     stays in callers — this seam only invokes the hooks, never the Store.
 
+    ``target_long_edge`` is the preview tier (``pipeline.cache.
+    PREVIEW_BUCKETS``, read off the live canvas by the caller): the preview
+    worker decodes AT that long edge and files the result under the same
+    bucket, so the tier the canvas needs is the tier the cache holds. ``None``
+    keeps the historic 1024 tier and every existing caller unchanged.
+
     Returns the in-flight :class:`AbortSignal` for the key (``None`` on
     sync cache-hit delivery). Fail-open: hook exceptions are logged, never
     raised.
     """
+    bucket = _preview_bucket(target_long_edge)
     # Fast path: cached tiers deliver synchronously (pixel first, preview).
     if cache is not None:
         for getter in ("get_pixel", "get_preview"):
             try:
-                hit = getattr(cache, getter)(str(path))
+                if getter == "get_preview" and bucket is not None:
+                    hit = _peek_cached_preview(cache, path, bucket)
+                else:
+                    hit = getattr(cache, getter)(str(path))
             except Exception:
                 hit = None
             usable = _is_usable_pixel(hit) if getter == "get_pixel" else _is_usable_preview(hit)
@@ -496,7 +558,7 @@ def ensure_async(
     if pool is None:
         # Headless/tests without a pool: sync preview, then full inline.
         _preview_inflight.pop(key, None)
-        preview = get_or_load_preview(cache, path)
+        preview = get_or_load_preview(cache, path, target_long_edge=target_long_edge)
         if _is_usable_preview(preview):
             if callable(on_ready):
                 try:
@@ -520,9 +582,7 @@ def ensure_async(
         except Exception:
             pass
         try:
-            from shared.image_processing.progressive_loader import load_preview_image
-
-            preview = load_preview_image(path_str)
+            preview = _preview_decode(path_str, bucket)
         except Exception:
             logger.debug("shared loading seam: preview worker failed for %s", path_str)
             return (None,)
@@ -535,7 +595,10 @@ def ensure_async(
             try:
                 if cache is not None:
                     try:
-                        cache.put_preview(path_str, preview)
+                        if bucket is None:
+                            cache.put_preview(path_str, preview)
+                        else:
+                            cache.put_preview(path_str, preview, bucket=bucket)
                     except TypeError:
                         cache.put_preview(path_str, None, preview)
             except Exception:
