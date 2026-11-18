@@ -226,6 +226,73 @@ def get_image_dimensions(store, image_number: int) -> tuple[int, int] | None:
     return None
 
 
+def get_effective_dimensions(
+    store, image_number: int, widget=None
+) -> tuple[int, int] | None:
+    """The dims the canvas actually draws: source size clipped by the crop box.
+
+    The HUD printed the SOURCE size while the canvas painted the crop (owner
+    report 2026-11-18: a 512x512 read "512x512" on screen as 312x512). One
+    resolver, the same ``resolve_box_for_path``/``box_dims`` seam the plan and
+    the letterbox owner use — so the chip and the pixels cannot disagree.
+    ``None`` means "no crop or nothing known": the caller keeps the source text
+    and adds nothing.
+
+    The crop service comes from ``crop_service_for_widget`` (the session
+    controller backlink) — the production Store pipeline slot holds the
+    reducer mirror and never the service, so reading that slot alone (the
+    first cut of this helper) always answered "no crop".
+    """
+    document = _document(store)
+    if document is None:
+        return None
+    path = document.image1_path if image_number == 1 else document.image2_path
+    full = get_image_dimensions(store, image_number)
+    if not path or full is None:
+        return None
+    try:
+        from tabs.image_compare.canvas.texture_parts.crop_clip import (
+            box_dims,
+            crop_service_for_widget,
+            resolve_box_for_path,
+        )
+        from tabs.image_compare.state.document import crop_override_for_path
+
+        service = crop_service_for_widget(widget) if widget is not None else None
+        if service is None:
+            try:
+                pipeline = store.get_session_state_slot("pipeline")
+                service = getattr(pipeline, "crop_service", None)
+            except Exception:
+                service = None
+        try:
+            override = crop_override_for_path(document, path)
+        except Exception:
+            override = None
+        box = resolve_box_for_path(path, service, override=override)
+        if box is None:
+            return None
+        dims = box_dims(box, full)
+    except Exception:
+        return None
+    if dims is None or dims == full:
+        return None
+    return dims
+
+
+def format_resolution_text(
+    source: tuple[int, int] | None, effective: tuple[int, int] | None
+) -> str:
+    """``512x512`` uncropped, ``512x512 → 312x512`` when a crop is active."""
+    if source is None:
+        return ""
+    text = f"{int(source[0])}x{int(source[1])}"
+    if effective is None:
+        return text
+    if (int(effective[0]), int(effective[1])) == (int(source[0]), int(source[1])):
+        return text
+    return f"{text} → {int(effective[0])}x{int(effective[1])}"
+
 
 class ImageCompareChromeSync(QObject):
     def __init__(self, widget, store, resolve_window_presenter):
@@ -576,10 +643,17 @@ class ImageCompareChromeSync(QObject):
         res1_text = ""
         res2_text = ""
         if has_both_images:
+            # The canvas widget (not the tab shell) is what carries the
+            # session-controller backlink the crop service resolves through.
+            canvas_widget = getattr(self.widget, "image_label", None) or self.widget
             if dim := get_image_dimensions(self.store, 1):
-                res1_text = f"{dim[0]}x{dim[1]}"
+                res1_text = format_resolution_text(
+                    dim, get_effective_dimensions(self.store, 1, canvas_widget)
+                )
             if dim := get_image_dimensions(self.store, 2):
-                res2_text = f"{dim[0]}x{dim[1]}"
+                res2_text = format_resolution_text(
+                    dim, get_effective_dimensions(self.store, 2, canvas_widget)
+                )
         try:
             self.widget.update_resolution_labels(
                 res1_text,

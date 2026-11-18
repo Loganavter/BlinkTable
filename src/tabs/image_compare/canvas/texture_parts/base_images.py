@@ -117,9 +117,22 @@ def update_common_letterbox_geometry(
     image2,
     *,
     crop_boxes: tuple | None = None,
+    envelope_dims: tuple | None = None,
 ):
+    """Thin passthrough to the display-tier owner (see its docstring).
+
+    ``envelope_dims`` is the plan's pair envelope: the live resize path passes
+    it so a resize cannot re-fit the UNCROPPED preview when the crop boxes are
+    not resolvable yet (owner report 2026-11-18 — the divider then drew against
+    a different ruler than the image).
+    """
     return _service.update_common_letterbox_geometry(
-        widget, image1, image2, crop_boxes=crop_boxes, hooks=_tier_hooks()
+        widget,
+        image1,
+        image2,
+        crop_boxes=crop_boxes,
+        envelope_dims=envelope_dims,
+        hooks=_tier_hooks(),
     )
 
 

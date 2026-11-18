@@ -455,8 +455,12 @@ class SettingsManager:
         s.system_notifications_enabled = self._get_setting(
             "system_notifications_enabled", True, bool
         )
+        # OFF by default: a fresh install must not silently crop the pair it
+        # is asked to compare (owner report 2026-11-18 — a 512x512 showed as
+        # 312x512 with the HUD still printing the source size). A stored value
+        # (the user toggled it) still wins.
         s.auto_crop_black_borders = self._get_setting(
-            "auto_crop_black_borders", True, bool
+            "auto_crop_black_borders", False, bool
         )
         s.video_recording_fps = clamp_fps(
             self._get_setting("video_recording_fps", FpsPolicy.DEFAULT, int)

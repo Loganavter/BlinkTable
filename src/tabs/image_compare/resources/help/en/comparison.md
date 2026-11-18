@@ -32,6 +32,7 @@ The divider controls on the toolbar, in their compact and expanded forms.
 ### Labels {#labels-and-metrics}
 
 - **Filename Overlay** (`N`) — shows or hides file-name labels on the canvas; the labels can be written into saved images.
+- **Size chip** — the corner chip above the file name shows the image size; while a crop is active it reads `512x512 → 312x512` (loaded → drawn), so a cropped pair never looks like a squeezed one.
 - **Zoom** — the labels disappear while the view is zoomed and come back at `100%` zoom.
 - **Label Text Settings** — opens a panel for font size, weight, opacity, colors, background, and placement.
 

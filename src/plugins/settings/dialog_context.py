@@ -28,7 +28,7 @@ class SettingsDialogContext:
     magnifier_auto_color_new_instances: bool = True
     auto_calculate_psnr: bool = False
     auto_calculate_ssim: bool = False
-    auto_crop_black_borders: bool = True
+    auto_crop_black_borders: bool = False
     current_video_fps: int = FpsPolicy.DEFAULT
     rhi_backend: str = "default"
     store: object | None = None
