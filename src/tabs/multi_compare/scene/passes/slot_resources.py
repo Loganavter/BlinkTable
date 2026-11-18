@@ -228,6 +228,22 @@ class SlotResources(PlainTextureResourcesBase):
         return srb
 
     def upload_tile(self, renderer, tile_key: object, image, updates) -> None:
+        try:
+            import logging as _dl
+            _c = None
+            try:
+                _c = image.pixelColor(0, 0).getRgb()
+            except Exception:
+                pass
+            _dl.getLogger("mc.tex.debug").warning(
+                "MCUP key=%r image=%s size=%s fmt=%s px0=%r"
+                % (tile_key, type(image).__name__,
+                   (image.width(), image.height()) if image is not None else None,
+                   image.format() if image is not None else None, _c)
+            )
+        except Exception:
+            pass
+
         def _allocate(size: tuple[int, int]):
             tex = renderer.rhi.newTexture(QRhiTexture.Format.RGBA8, QSize(*size))
             tex.create()

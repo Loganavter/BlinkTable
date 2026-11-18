@@ -923,8 +923,17 @@ class BaseImagesPass(CanvasRenderPass):
                 command_buffer.setShaderResources(srb, 1, (0, item_index * stride))
                 command_buffer.draw(4)
                 _draws += 1
+        try:
+            import logging as _dl
+            _dl.getLogger("mc.tex.debug").warning(
+                "MCDRAW plain draws=%d layers=%d array=%s srb_counts=%r"
+                % (_draws, len(ctx.projected_layers), self._use_array_this_frame,
+                   [len(s) if s else 0 for s in self._resolved_tile_srbs])
+            )
+        except Exception:
+            pass
         # Frame bus: submit fact for the plain path (record only, never
-        # instead -- mirrors image_compare's submit record).
+        # instead -- mirror image_compare's submit record).
         if _frame_context is not None:
             _frame_context.record(
                 "submit",
