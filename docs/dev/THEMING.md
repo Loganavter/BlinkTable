@@ -64,16 +64,17 @@ Two flat dicts of `{token_name: hex_color}`. Conventions:
 - Semantic names (`surface.button`, `flyout.border`), not visual names (`gray-200`).
 - Dark must be a **superset** of light (today dark adds `list_item.background.selected` / `list_item.icon.selected`). Extra dark keys are harmless; a key missing from dark is what makes theme switching look broken at runtime.
 - Add new tokens here, never as inline `#xxxxxx` in widgets.
-- **Mirror the toolkit.** `ThemeManager` resolves a token against this palette
-  only — it does not merge `sli_ui_toolkit.palettes.FLUENT_LIGHT`/`FLUENT_DARK`
-  under the host's dict, although the toolkit docs describe that fallback. So a
-  toolkit update that introduces a widget family's own state keys (the
-  2026-11-26 control-family migration added `input.*`, `checkbox.*`, `menu.*`,
-  `progress.*`, `slider.*`, `switch.*`, `label.*`, `flyout.text`, `link`, …)
-  leaves every unregistered key painting the painter's neutral `#808080` while
-  logging `unknown theme token`. `tests/contracts/test_theme_token_coverage.py`
-  gates both sides — it scans the installed toolkit for literal token reads and
-  requires both palettes to be supersets of the shipped Fluent ones.
+- **Mirror the toolkit.** `ThemeManager.register_palettes` layers this dict
+  over `sli_ui_toolkit.palettes.FLUENT_LIGHT`/`FLUENT_DARK` (toolkit #161), so a
+  token the app omits still resolves instead of painting the neutral `#808080`
+  — but it resolves to the *toolkit's* value. Carry the key here anyway: it
+  keeps every colour an app decision (the 2026-11-26 control-family migration,
+  `input.*` / `checkbox.*` / `menu.*` / `progress.*` / `slider.*` / `switch.*` /
+  `label.*` / `flyout.text` / `link`, is why), it keeps a pinned older toolkit
+  rendering identically, and `tests/contracts/test_theme_token_coverage.py`
+  fails when a toolkit release adds a token before this file learns a value for
+  it — it scans the installed toolkit for literal token reads and requires both
+  palettes to be supersets of the shipped Fluent ones.
 
 Loaded once at module import by `core/theme.py:load_themes()` and exposed as `LIGHT_THEME_PALETTE`, `DARK_THEME_PALETTE`.
 
