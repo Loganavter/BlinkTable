@@ -178,6 +178,35 @@ shiboken guards) + tests without a `DeferredDelete` sweep
 `tests/runtime` sweep fixture). Rule: guard the callback (`isValid`), never
 `sleep()`-retry the test.
 
+## Live-translation coverage (language bindings)
+
+A live language switch re-applies text only through `sli_ui_toolkit.i18n`
+bindings (`translatable_text` / `_tooltip` / `_placeholder` / `_callback`) or
+through an explicit `language_changed` subscription. A widget that resolves
+its text once with a bare `tr(key)` keeps the language it was built in — the
+catalogs pass `check_translations.py` while the UI stays English until a
+restart (measured 2026-10-29: the Image Compare toolbar and the onboarding
+overlay).
+
+`src/devtools/check_language_bindings.py` gates that class statically over
+`src/ui/**`, `src/plugins/**`, `src/tabs/*/ui/**`, `src/tabs/*/widget.py` and
+`src/tabs/*/plugins/**`: a module calling `tr(` is a violation unless it also
+uses a `translatable_*` helper, connects to `language_changed` / defines
+`on_language_changed`, or carries a measured entry in
+`src/devtools/language_bindings_allow.txt` (`path<TAB>reason`, relative to the
+repo root). The allowlist is a **ratchet**: an entry whose file is no longer a
+violation is itself a violation, so the list can only shrink — add a line only
+after reading the call site. Rerun after touching widget text:
+
+```bash
+python3 src/devtools/check_language_bindings.py            # whole tree, exit 0 = clean
+python3 src/devtools/check_language_bindings.py --selftest # the gate's own fixtures
+```
+
+The runtime half of the same rule is
+`tests/runtime/test_live_language_switch_retranslate.py` (bound text follows
+`emit_language_changed`; the onboarding overlay is the red-before surface).
+
 ## Test-run journal (baseline before "is it new?")
 
 When a suite fails, the first question is "new or pre-existing?" — do not answer

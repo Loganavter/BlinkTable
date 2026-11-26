@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QLabel, QHBoxLayout, QVBoxLayout, QWidget
 
 from plugins.onboarding.icons import DemoIcon
 from resources.translations import tr
+from sli_ui_toolkit.i18n import get_current_language, translatable_text
 from sli_ui_toolkit.managers import scaled_px
 from sli_ui_toolkit.widgets import Button
 from ui.theming import resolve_theme_color
@@ -23,22 +24,31 @@ _SLIDE_CAPTION_SPACING_PX = 8
 
 
 def build_modes(store) -> list[dict[str, str]]:
+    # ``name``/``desc`` stay for callers that need a string now; the ``*_key``
+    # pair is what the overlay and slides bind, so a live language switch
+    # re-applies the chip and slide titles instead of keeping the first paint.
     current_lang = getattr(store.settings, "current_language", "en")
     return [
         {
             "key": "beginner",
             "name": tr("settings.ui_mode_beginner", current_lang),
+            "name_key": "settings.ui_mode_beginner",
             "desc": tr("onboarding.beginner_description", current_lang),
+            "desc_key": "onboarding.beginner_description",
         },
         {
             "key": "advanced",
             "name": tr("settings.ui_mode_advanced", current_lang),
+            "name_key": "settings.ui_mode_advanced",
             "desc": tr("onboarding.advanced_description", current_lang),
+            "desc_key": "onboarding.advanced_description",
         },
         {
             "key": "expert",
             "name": tr("settings.ui_mode_expert", current_lang),
+            "name_key": "settings.ui_mode_expert",
             "desc": tr("onboarding.expert_description", current_lang),
+            "desc_key": "onboarding.expert_description",
         },
     ]
 
@@ -50,8 +60,9 @@ def create_slide_for_mode(overlay, mode_data):
     layout.setSpacing(scaled_px(_SLIDE_ROOT_SPACING_PX))
     page._onboarding_root_layout = layout
 
-    lbl_title = QLabel(mode_data["name"])
+    lbl_title = QLabel()
     lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    translatable_text(lbl_title, mode_data["name_key"])
     layout.addWidget(lbl_title)
     page._onboarding_title = lbl_title
 
@@ -64,18 +75,18 @@ def create_slide_for_mode(overlay, mode_data):
     page._onboarding_captions = []
     page._onboarding_caption_layouts = []
 
-    current_lang = getattr(overlay.store.settings, "current_language", "en")
     key = mode_data["key"]
 
     if key == "beginner":
-        _add_beginner_demo(overlay, page, demo_container, demo_layout, current_lang)
+        _add_beginner_demo(overlay, page, demo_container, demo_layout)
     elif key == "advanced":
-        _add_advanced_demo(overlay, page, demo_container, demo_layout, current_lang)
+        _add_advanced_demo(overlay, page, demo_container, demo_layout)
     elif key == "expert":
-        _add_expert_demo(overlay, page, demo_container, demo_layout, current_lang)
+        _add_expert_demo(overlay, page, demo_container, demo_layout)
 
     layout.addWidget(demo_container)
     desc = _create_description_label(overlay, mode_data.get("desc", ""))
+    translatable_text(desc, mode_data["desc_key"])
     layout.addWidget(desc)
     page._onboarding_desc = desc
 
@@ -131,7 +142,7 @@ def scale_all_slides(overlay, scale: float) -> None:
         scale_slide(overlay, page, scale)
 
 
-def _add_beginner_demo(overlay, page, demo_container, demo_layout, current_lang: str) -> None:
+def _add_beginner_demo(overlay, page, demo_container, demo_layout) -> None:
     # Mirrors toolbar divider chrome: orientation_simple, divider_visible,
     # divider_color, divider_width — default unchecked / no forced demo state.
     b1 = Button(
@@ -150,7 +161,9 @@ def _add_beginner_demo(overlay, page, demo_container, demo_layout, current_lang:
     b3.setUnderlineColor(accent_color)
 
     def _on_beginner_color_clicked():
-        _show_color_dialog(overlay, b3, b3._custom_color or accent_color, current_lang)
+        _show_color_dialog(
+            overlay, b3, b3._custom_color or accent_color, get_current_language()
+        )
 
     b3.clicked.connect(_on_beginner_color_clicked)
 
@@ -161,19 +174,22 @@ def _add_beginner_demo(overlay, page, demo_container, demo_layout, current_lang:
         zero_icon=DemoIcon.DIVIDER_HIDDEN,
         parent=demo_container,
     )
+    # Keys, not resolved text: the caption label is bound by ``_wrap_btn`` so a
+    # live language switch re-applies it.
     labels = [
-        tr("onboarding.beginner.button.rotate", current_lang),
-        tr("onboarding.beginner.button.view", current_lang),
-        tr("onboarding.beginner.button.color", current_lang),
-        tr("onboarding.beginner.button.width", current_lang),
+        "onboarding.beginner.button.rotate",
+        "onboarding.beginner.button.view",
+        "onboarding.beginner.button.color",
+        "onboarding.beginner.button.width",
     ]
 
-    for btn, text in ((b1, labels[0]), (b2, labels[1]), (b3, labels[2]), (b4, labels[3])):
+    pairs = ((b1, labels[0]), (b2, labels[1]), (b3, labels[2]), (b4, labels[3]))
+    for btn, text_key in pairs:
         page._onboarding_demo_buttons.append(btn)
-        demo_layout.addLayout(_wrap_btn(overlay, page, btn, text))
+        demo_layout.addLayout(_wrap_btn(overlay, page, btn, text_key))
 
 
-def _add_advanced_demo(overlay, page, demo_container, demo_layout, current_lang: str) -> None:
+def _add_advanced_demo(overlay, page, demo_container, demo_layout) -> None:
     # Combined orientation+width; thickness via wheel — no underline strip on this demo.
     # Color button keeps the accent underline (the paint control).
     b_smart = ScrollValueButton(
@@ -195,21 +211,21 @@ def _add_advanced_demo(overlay, page, demo_container, demo_layout, current_lang:
             overlay,
             b_color,
             b_color._custom_color or accent_color,
-            current_lang,
+            get_current_language(),
         )
 
     b_color.clicked.connect(_on_advanced_color_clicked)
     txts = [
-        tr("onboarding.advanced.button.rotate_width_hint", current_lang),
-        tr("onboarding.advanced.button.color", current_lang),
+        "onboarding.advanced.button.rotate_width_hint",
+        "onboarding.advanced.button.color",
     ]
 
-    for btn, text in ((b_smart, txts[0]), (b_color, txts[1])):
+    for btn, text_key in ((b_smart, txts[0]), (b_color, txts[1])):
         page._onboarding_demo_buttons.append(btn)
-        demo_layout.addLayout(_wrap_btn(overlay, page, btn, text))
+        demo_layout.addLayout(_wrap_btn(overlay, page, btn, text_key))
 
 
-def _add_expert_demo(overlay, page, demo_container, demo_layout, current_lang: str) -> None:
+def _add_expert_demo(overlay, page, demo_container, demo_layout) -> None:
     # Same combined control as advanced; expert adds RMB color / MMB reset.
     b_expert = ScrollValueButton(
         icon=(DemoIcon.VERTICAL_SPLIT, DemoIcon.HORIZONTAL_SPLIT),
@@ -230,7 +246,7 @@ def _add_expert_demo(overlay, page, demo_container, demo_layout, current_lang: s
             overlay,
             b_expert,
             b_expert._underline_color or accent_color,
-            current_lang,
+            get_current_language(),
         )
 
     def _on_expert_middle():
@@ -248,13 +264,13 @@ def _add_expert_demo(overlay, page, demo_container, demo_layout, current_lang: s
 
     b_expert.rightClicked.connect(_on_expert_right)
     b_expert.middleClicked.connect(_on_expert_middle)
-    info_txt = tr("onboarding.expert.button.info", current_lang)
+    info_txt = "onboarding.expert.button.info"
 
     page._onboarding_demo_buttons.append(b_expert)
     demo_layout.addLayout(_wrap_btn(overlay, page, b_expert, info_txt))
 
 
-def _show_color_dialog(overlay, button, current_color, current_lang: str) -> None:
+def _show_color_dialog(overlay, button, current_color, current_lang: str | None = None) -> None:
     existing = getattr(button, "_color_dialog", None)
     if existing is not None and existing.isVisible():
         # In-stack raise only: bringing the dialog forward must not
@@ -267,7 +283,10 @@ def _show_color_dialog(overlay, button, current_color, current_lang: str) -> Non
     color_dialog = ColorPickerDialog(
         QColor(current_color),
         overlay.window() or overlay,
-        title=tr("ui.select_color", current_lang),
+        # Resolved when the dialog opens (a per-click modal has nothing to
+        # bind); fall back to the live language so a switch made after the
+        # slide was built still titles the dialog correctly.
+        title=tr("ui.select_color", current_lang or get_current_language()),
         show_alpha=True,
     )
     color_dialog.setModal(False)
@@ -308,13 +327,14 @@ def _style_demo_btn(
     btn.update()
 
 
-def _wrap_btn(overlay, page, btn, text):
+def _wrap_btn(overlay, page, btn, text_key):
     layout = QVBoxLayout()
     layout.setSpacing(scaled_px(_SLIDE_CAPTION_SPACING_PX))
     layout.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
     page._onboarding_caption_layouts.append(layout)
-    if text:
-        lbl = QLabel(text)
+    if text_key:
+        lbl = QLabel()
+        translatable_text(lbl, text_key)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         text_col = resolve_theme_color(overlay.theme_manager, "list_item.text.rating").name()
         label_palette = lbl.palette()

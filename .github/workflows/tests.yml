@@ -118,6 +118,16 @@ jobs:
             --extra-root ../sli-ui-toolkit/src \
             --allow scripts/comment_citations_allow.txt
 
+      - name: Check language bindings (live-switch coverage)
+        working-directory: app
+        run: |
+          # A module whose user-visible text is resolved once with a bare tr()
+          # keeps its language after a live switch (restart-only). The gate
+          # needs `translatable_*` bindings, a `language_changed` hook, or a
+          # measured entry in src/devtools/language_bindings_allow.txt; stale
+          # entries fail too, so the allowlist can only shrink.
+          python src/devtools/check_language_bindings.py
+
   full:
     name: Full suite (nightly)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
