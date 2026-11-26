@@ -42,7 +42,7 @@ class FlyoutSurfaceWidget(ThemedWidget, QWidget):
     def on_theme_changed(self) -> None:
         """Re-read the flyout tokens; fall back to the palette Window role."""
         try:
-            bg = try_resolve_theme_color(self._theme_manager, "surface.background")
+            bg = try_resolve_theme_color(self._theme_manager, "flyout.background")
             border = try_resolve_theme_color(self._theme_manager, "flyout.border")
         except Exception:
             bg = border = None
