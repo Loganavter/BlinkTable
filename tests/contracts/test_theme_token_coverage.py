@@ -1,15 +1,16 @@
-"""Contract: the app palette covers every token the toolkit (and the app) reads.
+"""Contract: the app palette names every token the toolkit (and the app) reads.
 
-Dogma: ``ThemeManager`` resolves a token against the host palette only — the
-toolkit ships no merge of its own defaults into a host's registered dict. A key
-the host does not register therefore paints the painter's neutral fallback
-(``#808080``) or a neighbouring role's colour and logs ``unknown theme token``
-(measured 2026-11-26 after the toolkit's control-family migration: 52 keys —
-``input.text`` / ``input.background`` read by ``CustomLineEdit``, the whole
-``checkbox.*`` / ``menu.*`` / ``list_item.*`` state sets, ``progress.*``,
-``slider.*``, ``switch.*``, ``label.*``, ``flyout.*``, ``link``, …). The
-gallery had already grown a token-coverage test for its own keys; this one
-covers the seam with the toolkit.
+Dogma: the app's colours are an app decision. ``ThemeManager`` layers this
+palette over ``sli_ui_toolkit.palettes.FLUENT_*`` (toolkit #161), so a token the
+app omits still resolves — to the toolkit's value. That is fine for a widget
+whose look nobody tuned and wrong for one the app restyles, and it is invisible:
+nothing logs, the widget simply renders a default that does not match its
+neighbours. A pinned older toolkit has no layer at all and paints the neutral
+``#808080`` (the 2026-11-26 control-family migration: 52 keys — ``input.text``
+and ``input.background`` read by ``CustomLineEdit``, the whole ``checkbox.*`` /
+``menu.*`` / ``list_item.*`` state sets, ``progress.*``, ``slider.*``,
+``switch.*``, ``label.*``, ``flyout.*``, ``link``). The gallery already had a
+token-coverage test for its own keys; this one covers the seam with the toolkit.
 
 Three invariants, each a separate failure so a red run names the cause:
 
@@ -111,7 +112,8 @@ def _assert_covered(
         f"{owner} reads {len(problems)} token(s) the app palette does not define.\n"
         + "\n".join(problems)
         + "\nAdd each key to src/resources/themes.json under BOTH \"light\" and \"dark\" "
-        "(THEMING.md § Palettes). A missing key paints the neutral #808080 fallback."
+        "(THEMING.md § Palettes). An omitted key silently takes the toolkit default "
+        "(or the neutral #808080 on a toolkit older than #161)."
     )
 
 
